@@ -674,6 +674,8 @@ export async function render(root) {
           <dt>Staff no</dt><dd>${p.staffNumber}</dd>
           <dt>Initials</dt><dd>${p.initials || '–'}</dd>
           <dt>Team</dt><dd>${team?.name || '–'}</dd>
+          ${p.jobTitle ? html`<dt>Job title</dt><dd>${p.jobTitle}</dd>` : ''}
+          ${p.email ? html`<dt>Email</dt><dd>${p.email}</dd>` : ''}
           ${p.mobile ? html`<dt>Mobile</dt><dd><a href="tel:${p.mobile.replace(/[^+\d]/g, '')}">${p.mobile}</a></dd>` : ''}
         </dl>
         <h3>Accreditations</h3>

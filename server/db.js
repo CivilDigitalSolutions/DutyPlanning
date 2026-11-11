@@ -94,12 +94,22 @@ export function openDb(file) {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA);
+  migrate(db);
   const count = db.prepare('SELECT COUNT(*) AS n FROM duty_codes').get().n;
   if (count === 0) {
     const ins = db.prepare('INSERT INTO duty_codes (code,label,category,color,private,sort_order) VALUES (?,?,?,?,?,?)');
     DEFAULT_DUTY_CODES.forEach((d, i) => ins.run(d.code, d.label, d.category, d.color, d.private ? 1 : 0, i));
   }
   return db;
+}
+
+/** Add columns introduced after the first release to existing databases. */
+function migrate(db) {
+  const cols = new Set(db.prepare('PRAGMA table_info(people)').all().map((c) => c.name));
+  if (!cols.has('email')) db.exec('ALTER TABLE people ADD COLUMN email TEXT');
+  if (!cols.has('job_title')) db.exec('ALTER TABLE people ADD COLUMN job_title TEXT');
+  if (!cols.has('start_date')) db.exec('ALTER TABLE people ADD COLUMN start_date TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS people_email ON people(email COLLATE NOCASE) WHERE email IS NOT NULL');
 }
 
 /** Run fn inside a transaction. */

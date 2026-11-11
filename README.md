@@ -18,7 +18,7 @@ A Progressive Web App (PWA) that replaces the duty-planning spreadsheet. It work
 | Import and export | Upload the existing `.xlsx` or `.csv` and check a preview before anything is written. Export to `.xlsx` in the same layout, with duty colours, so files round-trip. |
 | Live updates | When a planner saves a change, everyone viewing the plan sees it within a second or two. |
 | Offline | The app and the last-viewed data are cached on the device. When offline, it shows the saved copy with a banner, and changes are blocked until you reconnect. |
-| Accounts | Roles are admin, planner and staff. You can create staff logins for everyone in one step (username = staff number). The app forces a password change at first sign-in. An activity log records every change. |
+| Accounts | Roles are admin, planner and staff. People sign in with their **email address** or staff number. Admins can bulk-import new users from a downloadable template (see below), or create staff logins for everyone already on the plan in one step. The app forces a password change at first sign-in. An activity log records every change. |
 
 ## Spreadsheet import format
 
@@ -35,6 +35,32 @@ Staff No | Name | Initials | Mobile | [Team] | <accreditation columns…> | 01/1
 - **Vacancies**: blank rows (or rows whose name is `VACANT`) inside a team count as vacant posts. The team's establishment is set to people + vacancies.
 - **Duty codes** not seen before (for example, `Training Course 3`) are created automatically. Set their colour and type afterwards under **Manage → Duty codes**.
 - **Merge** mode updates people by staff number and replaces their duties for the dates in the file. **Replace** mode clears all teams, people and duties first.
+
+## Bulk importing new users
+
+Under **Manage → User accounts → Import users** (admins only):
+
+1. **Download the template**, either Excel (`.xlsx`, with dropdowns for Team and App role plus an *Instructions* sheet) or CSV.
+2. **Fill in one row per person.** Only **Email** and a name are required.
+
+   | Column | Notes |
+   | --- | --- |
+   | Email * | Becomes their sign-in name. Must be unique. |
+   | First name, Last name / Full name | Give First + Last, or Full name. |
+   | Staff No | If blank, one is generated (e.g. `U00042`). |
+   | Initials | If blank, made from the name. |
+   | Mobile | |
+   | Team | Must match an existing team, unless "Create teams that don't exist yet" is ticked. |
+   | Position in team | Order on the plan. Blank puts them at the end of the team. |
+   | Job title | Rank, grade or job title. |
+   | Start date | dd/mm/yyyy (or choose month/day order when uploading). |
+   | App role | `staff` (default), `planner` or `admin`. |
+   | One column per accreditation | `Y` if held, or the expiry date. |
+
+3. **Upload and check.** Every row is validated before anything is saved: bad or duplicate emails, missing names, unknown roles, unknown teams and staff numbers that belong to someone else are all flagged. Each row is shown as New, Update or Error.
+4. **Import.** People already in the app (matched on email, then staff number) are updated; their passwords are never changed. New accounts get either the temporary password you enter, or a different generated one each. Generated passwords are shown once, with a button to copy them into Excel. Everyone must choose their own password at first sign-in. A team's establishment is raised if new starters take it over its post count.
+
+The app does not send emails itself, so share temporary passwords through your usual secure channel. To send them automatically you could add Amazon SES.
 
 ## Running locally
 

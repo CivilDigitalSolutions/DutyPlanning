@@ -7,8 +7,8 @@ export function renderLogin(root, { onDone }) {
       <form class="card auth-card" novalidate>
         <img src="/icons/icon.svg" alt="" width="56" height="56" />
         <h1>Duty Planning</h1>
-        <p class="muted">Sign in with your staff number or username.</p>
-        <label>Username or staff number<input name="username" autocomplete="username" required autofocus /></label>
+        <p class="muted">Sign in with your email address or staff number.</p>
+        <label>Email or staff number<input name="username" autocomplete="username" required autofocus /></label>
         <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
         <p class="error" role="alert" hidden></p>
         <button class="btn btn-primary btn-block">Sign in</button>

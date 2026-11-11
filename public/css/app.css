@@ -1319,3 +1319,95 @@ table.data tr.inactive td {
 .dlg header .icon-btn:hover {
   background: var(--surface-2);
 }
+
+/* Bulk user import */
+.import-users {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.import-users .step {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.import-users .step + .step {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+.import-users h3 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.import-users p {
+  margin: 0;
+}
+.step-n {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-size: 12px;
+}
+.row-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+.badge-create {
+  color: var(--success);
+  border-color: currentColor;
+}
+.badge-update {
+  color: var(--primary);
+  border-color: currentColor;
+}
+.badge-skip {
+  color: var(--muted);
+  border-color: currentColor;
+}
+.badge-error {
+  color: var(--danger);
+  border-color: currentColor;
+}
+.preview-table {
+  max-height: 300px;
+  overflow: auto;
+}
+.preview-table td,
+.preview-table th {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+tr.row-error td {
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+}
+.copy-src {
+  width: 100%;
+  min-height: 120px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}

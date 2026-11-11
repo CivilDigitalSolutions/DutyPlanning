@@ -21,6 +21,8 @@ import {
 } from './auth.js';
 import { addDays, daysBetween, eachDate, isValidIso } from './dates.js';
 import { applyImport, exportWorkbook, parseGrid, readGrid } from './spreadsheet.js';
+import { parseUserRows, templateCsv, ROLES } from './user-import.js';
+import { applyUserImport, userTemplateWorkbook } from './users-io.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const MAX_RANGE_DAYS = 400;
@@ -120,7 +122,10 @@ export function createApp(db, config = {}) {
       const password = String(req.body?.password ?? '');
       const key = `${req.ip}|${username.toLowerCase()}`;
       if (loginThrottled(key)) throw new HttpError(429, 'Too many attempts - try again in 15 minutes');
-      const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+      // Sign in with a username (staff number or email), or the email recorded on the person.
+      const u =
+        db.prepare('SELECT * FROM users WHERE username = ?').get(username) ||
+        db.prepare('SELECT u.* FROM users u JOIN people p ON p.id = u.person_id WHERE p.email = ? ORDER BY u.id LIMIT 1').get(username);
       if (!u || !verifyPassword(password, u.password_hash)) {
         recordLoginFailure(key);
         throw new HttpError(401, 'Incorrect username or password');
@@ -210,7 +215,7 @@ export function createApp(db, config = {}) {
 
     const people = db
       .prepare(
-        `SELECT id, staff_number AS staffNumber, name, initials, mobile, team_id AS teamId, sort_order AS sortOrder
+        `SELECT id, staff_number AS staffNumber, name, initials, mobile, email, job_title AS jobTitle, team_id AS teamId, sort_order AS sortOrder
          FROM people WHERE active = 1 ORDER BY sort_order, name`,
       )
       .all();
@@ -222,7 +227,11 @@ export function createApp(db, config = {}) {
       p.acc = acc[p.id] || {};
       const canSeeMobile =
         isPlanner || p.id === me?.id || cfg.mobileVisibility === 'all' || (cfg.mobileVisibility === 'team' && me && me.team_id && me.team_id === p.teamId);
-      if (!canSeeMobile) delete p.mobile;
+      if (!canSeeMobile) {
+        delete p.mobile;
+        delete p.email;
+      }
+      if (!p.jobTitle) delete p.jobTitle;
     }
     // Optional ?person=<id> limits assignments to one person (used for long personal views).
     const onlyPerson = req.query.person ? Number(req.query.person) : null;
@@ -425,7 +434,8 @@ export function createApp(db, config = {}) {
   app.get('/api/people', planner, (req, res) => {
     const people = db
       .prepare(
-        `SELECT p.id, p.staff_number AS staffNumber, p.name, p.initials, p.mobile, p.team_id AS teamId, p.sort_order AS sortOrder, p.active,
+        `SELECT p.id, p.staff_number AS staffNumber, p.name, p.initials, p.mobile, p.email, p.job_title AS jobTitle, p.start_date AS startDate,
+                p.team_id AS teamId, p.sort_order AS sortOrder, p.active,
                 (SELECT u.username FROM users u WHERE u.person_id = p.id LIMIT 1) AS username
          FROM people p LEFT JOIN teams t ON t.id = p.team_id
          ORDER BY p.active DESC, t.id IS NULL, t.sort_order, t.name, p.sort_order, p.name`,
@@ -443,7 +453,22 @@ export function createApp(db, config = {}) {
     if (Number.isNaN(teamId)) throw bad('Invalid team');
     if (teamId != null && !db.prepare('SELECT 1 FROM teams WHERE id = ?').get(teamId)) throw bad('Team not found');
     const sortOrder = optInt(b.sortOrder) ?? 0;
-    return [staffNumber, name, s(b.initials, 10) || null, s(b.mobile, 30) || null, teamId, Number.isNaN(sortOrder) ? 0 : sortOrder, b.active === false ? 0 : 1];
+    const email = s(b.email, 200).toLowerCase() || null;
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw bad('Enter a valid email address');
+    const startDate = s(b.startDate, 10) || null;
+    if (startDate && !isValidIso(startDate)) throw bad('Start date must be a date');
+    return [
+      staffNumber,
+      name,
+      s(b.initials, 10) || null,
+      s(b.mobile, 30) || null,
+      teamId,
+      Number.isNaN(sortOrder) ? 0 : sortOrder,
+      b.active === false ? 0 : 1,
+      email,
+      s(b.jobTitle, 100) || null,
+      startDate,
+    ];
   };
   const uniqueGuard = (fn, msg) => {
     try {
@@ -462,10 +487,10 @@ export function createApp(db, config = {}) {
         () =>
           Number(
             db
-              .prepare('INSERT INTO people (staff_number,name,initials,mobile,team_id,sort_order,active) VALUES (?,?,?,?,?,?,?)')
+              .prepare('INSERT INTO people (staff_number,name,initials,mobile,team_id,sort_order,active,email,job_title,start_date) VALUES (?,?,?,?,?,?,?,?,?,?)')
               .run(...personBody(req.body || {})).lastInsertRowid,
           ),
-        'That staff number already exists',
+        'That staff number or email is already used by someone else',
       );
       audit(db, req.user, 'person.create', { id, staffNumber: req.body.staffNumber });
       broadcast({ type: 'meta' });
@@ -480,9 +505,9 @@ export function createApp(db, config = {}) {
       const r = uniqueGuard(
         () =>
           db
-            .prepare('UPDATE people SET staff_number=?, name=?, initials=?, mobile=?, team_id=?, sort_order=?, active=? WHERE id=?')
+            .prepare('UPDATE people SET staff_number=?, name=?, initials=?, mobile=?, team_id=?, sort_order=?, active=?, email=?, job_title=?, start_date=? WHERE id=?')
             .run(...personBody(req.body || {}), Number(req.params.id)),
-        'That staff number already exists',
+        'That staff number or email is already used by someone else',
       );
       if (!r.changes) throw new HttpError(404, 'Person not found');
       audit(db, req.user, 'person.update', { id: req.params.id });
@@ -730,6 +755,79 @@ export function createApp(db, config = {}) {
         audit(db, req.user, 'user.bulkCreate', { created, skipped });
       });
       res.json({ created, skipped });
+    }),
+  );
+
+  // ---- Bulk user import from the email-based template ----
+  const listAccsForImport = () => db.prepare('SELECT id, code, name FROM accreditations ORDER BY sort_order, name').all();
+  app.get(
+    '/api/users/template.xlsx',
+    admin,
+    wrap(async (req, res) => {
+      const buf = await userTemplateWorkbook(db);
+      res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.set('Content-Disposition', 'attachment; filename="new-users-template.xlsx"');
+      res.send(Buffer.from(buf));
+    }),
+  );
+  app.get('/api/users/template.csv', admin, (req, res) => {
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', 'attachment; filename="new-users-template.csv"');
+    res.send('\uFEFF' + templateCsv(listAccsForImport()));
+  });
+  app.post(
+    '/api/users/import',
+    admin,
+    express.raw({ type: () => true, limit: '10mb' }),
+    wrap(async (req, res) => {
+      if (!req.body?.length) throw bad('Upload the filled-in template (.xlsx or .csv)');
+      const q = req.query;
+      const createTeams = q.createTeams !== '0';
+      const updateExisting = q.updateExisting !== '0';
+      const defaultRole = ROLES.includes(q.defaultRole) ? q.defaultRole : 'staff';
+      const password = String(req.get('X-Temp-Password') || '');
+      if (password) {
+        const err = validatePassword(password);
+        if (err) throw bad(err);
+      }
+      let parsed;
+      try {
+        const { rows } = await readGrid(req.body, '');
+        parsed = parseUserRows(rows, {
+          teams: db.prepare('SELECT id, name FROM teams').all(),
+          accreditations: listAccsForImport(),
+          dateOrder: q.dateOrder === 'mdy' ? 'mdy' : cfg.dateOrder,
+        });
+      } catch (e) {
+        throw bad(`Could not read file: ${e.message}`);
+      }
+      // Work out what will happen to each row.
+      const byEmail = db.prepare('SELECT id FROM people WHERE email = ?');
+      const byStaff = db.prepare('SELECT id, email FROM people WHERE staff_number = ?');
+      const userByName = db.prepare('SELECT 1 FROM users WHERE username = ?');
+      for (const r of parsed.rows) {
+        if (r.newTeam && !createTeams) r.errors.push(`Team "${r.teamName}" does not exist`);
+        const sn = r.staffNumber ? byStaff.get(r.staffNumber) : null;
+        if (sn?.email && sn.email.toLowerCase() !== r.email) r.errors.push(`Staff No ${r.staffNumber} already belongs to ${sn.email}`);
+        const existing = byEmail.get(r.email) || sn || userByName.get(r.email);
+        r.action = r.errors.length ? 'error' : existing ? (updateExisting ? 'update' : 'skip') : 'create';
+      }
+      const preview = {
+        columns: parsed.columns,
+        warnings: parsed.warnings,
+        counts: ['create', 'update', 'skip', 'error'].reduce((o, k) => ({ ...o, [k]: parsed.rows.filter((r) => r.action === k).length }), {}),
+        newTeams: [...new Set(parsed.rows.filter((r) => r.newTeam && createTeams).map((r) => r.teamName))],
+        rows: parsed.rows.map((r) => ({ line: r.line, email: r.email, name: r.name, staffNumber: r.staffNumber, team: r.teamName, role: r.role || defaultRole, jobTitle: r.jobTitle, action: r.action, errors: r.errors })),
+      };
+      if (q.dryRun === '1') return res.json({ preview });
+      let summary;
+      try {
+        summary = applyUserImport(db, parsed, { createTeams, updateExisting, defaultRole, password, user: req.user });
+      } catch (e) {
+        throw bad(e.message);
+      }
+      broadcast({ type: 'meta' });
+      res.json({ preview, summary });
     }),
   );
 

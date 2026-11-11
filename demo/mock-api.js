@@ -5,6 +5,7 @@
 import { parseCsv, parseGrid, cellValue, guessCategory, colorFor } from '../server/sheet-parse.js';
 import { daysBetween, eachDate, isValidIso } from '../server/dates.js';
 import { seedDemo } from './seed.js';
+import { parseUserRows, generatePassword, templateCsv, ROLES } from '../server/user-import.js';
 import { dialog, html, todayIso } from '../public/js/util.js';
 
 const KEY = 'dp-demo-v1';
@@ -82,7 +83,7 @@ const listTeams = () =>
 const listCodes = () => sortBy(db.codes, 'sortOrder', 'code');
 const listAccs = () => sortBy(db.accs, 'sortOrder', 'name');
 const unique = (list, key, val, exceptId, msg) => {
-  if (list.some((x) => lc(x[key]) === lc(val) && x.id !== exceptId)) fail(409, msg);
+  if (list.some((x) => x[key] != null && lc(x[key]) === lc(val) && x.id !== exceptId)) fail(409, msg);
 };
 
 function readRange(q) {
@@ -98,7 +99,9 @@ const routes = [];
 const on = (method, pattern, fn) => routes.push({ method, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn });
 
 on('POST', '/auth/login', ({ body }) => {
-  const u = db.users.find((x) => lc(x.username) === lc(s(body?.username, 100)));
+  const name = lc(s(body?.username, 100));
+  const byEmail = db.people.find((p) => p.email && lc(p.email) === name);
+  const u = db.users.find((x) => lc(x.username) === name) || (byEmail && db.users.find((x) => x.personId === byEmail.id));
   if (!u || u.password !== String(body?.password ?? '')) fail(401, 'Incorrect username or password');
   db.session = u.id;
   audit(u, 'login');
@@ -150,9 +153,13 @@ on('GET', '/roster', ({ query }) => {
     'sortOrder',
     'name',
   ).map((p) => {
-    const out = { id: p.id, staffNumber: p.staffNumber, name: p.name, initials: p.initials, mobile: p.mobile, teamId: p.teamId, sortOrder: p.sortOrder, acc: db.pacc[p.id] || {} };
+    const out = { id: p.id, staffNumber: p.staffNumber, name: p.name, initials: p.initials, mobile: p.mobile, email: p.email, teamId: p.teamId, sortOrder: p.sortOrder, acc: db.pacc[p.id] || {} };
+    if (p.jobTitle) out.jobTitle = p.jobTitle;
     const canSee = planner || p.id === mine?.id || (mine?.teamId && mine.teamId === p.teamId);
-    if (!canSee) delete out.mobile;
+    if (!canSee) {
+      delete out.mobile;
+      delete out.email;
+    }
     return out;
   });
   const only = query.person ? Number(query.person) : null;
@@ -300,12 +307,28 @@ const personBody = (b) => {
   if (Number.isNaN(teamId)) bad('Invalid team');
   if (teamId != null && !db.teams.some((t) => t.id === teamId)) bad('Team not found');
   const sortOrder = optInt(b.sortOrder) ?? 0;
-  return { staffNumber, name, initials: s(b.initials, 10) || null, mobile: s(b.mobile, 30) || null, teamId, sortOrder: Number.isNaN(sortOrder) ? 0 : sortOrder, active: b.active !== false };
+  const email = lc(s(b.email, 200)) || null;
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) bad('Enter a valid email address');
+  const startDate = s(b.startDate, 10) || null;
+  if (startDate && !isValidIso(startDate)) bad('Start date must be a date');
+  return {
+    staffNumber,
+    name,
+    initials: s(b.initials, 10) || null,
+    mobile: s(b.mobile, 30) || null,
+    teamId,
+    sortOrder: Number.isNaN(sortOrder) ? 0 : sortOrder,
+    active: b.active !== false,
+    email,
+    jobTitle: s(b.jobTitle, 100) || null,
+    startDate,
+  };
 };
 on('POST', '/people', ({ body }) => {
   const u = need('planner');
   const p = personBody(body || {});
   unique(db.people, 'staffNumber', p.staffNumber, null, 'That staff number already exists');
+  if (p.email) unique(db.people, 'email', p.email, null, 'That email is already used by someone else');
   const id = nextId();
   db.people.push({ id, ...p });
   audit(u, 'person.create', { id, staffNumber: p.staffNumber });
@@ -317,6 +340,7 @@ on('PUT', '/people/:id', ({ body, params }) => {
   const p = db.people.find((x) => x.id === Number(params.id)) || fail(404, 'Person not found');
   const v = personBody(body || {});
   unique(db.people, 'staffNumber', v.staffNumber, p.id, 'That staff number already exists');
+  if (v.email) unique(db.people, 'email', v.email, p.id, 'That email is already used by someone else');
   Object.assign(p, v);
   audit(u, 'person.update', { id: p.id });
   changed({ type: 'meta' });
@@ -627,14 +651,108 @@ on('POST', '/import', async ({ body, query }) => {
   return { preview, summary };
 });
 
+// Bulk user import (same behaviour as server/users-io.js)
+on('POST', '/users/import', async ({ body, query, headers }) => {
+  const u = need('admin');
+  if (!(body instanceof Blob) || !body.size) bad('Upload the filled-in template (.xlsx or .csv)');
+  const createTeams = query.createTeams !== '0';
+  const updateExisting = query.updateExisting !== '0';
+  const defaultRole = ROLES.includes(query.defaultRole) ? query.defaultRole : 'staff';
+  const password = String(headers?.['X-Temp-Password'] || '');
+  if (password && password.length < 8) bad('Password must be at least 8 characters');
+  let parsed;
+  try {
+    parsed = parseUserRows(await readGrid(await body.arrayBuffer()), { teams: db.teams, accreditations: db.accs, dateOrder: query.dateOrder === 'mdy' ? 'mdy' : 'dmy' });
+  } catch (e) {
+    bad(`Could not read file: ${e.message}`);
+  }
+  const byEmail = (e) => db.people.find((p) => p.email && lc(p.email) === e);
+  const byStaff = (sn) => db.people.find((p) => lc(p.staffNumber) === lc(sn));
+  for (const r of parsed.rows) {
+    if (r.newTeam && !createTeams) r.errors.push(`Team "${r.teamName}" does not exist`);
+    const sn = r.staffNumber ? byStaff(r.staffNumber) : null;
+    if (sn?.email && lc(sn.email) !== r.email) r.errors.push(`Staff No ${r.staffNumber} already belongs to ${sn.email}`);
+    const existing = byEmail(r.email) || sn || db.users.find((x) => lc(x.username) === r.email);
+    r.action = r.errors.length ? 'error' : existing ? (updateExisting ? 'update' : 'skip') : 'create';
+  }
+  const preview = {
+    columns: parsed.columns,
+    warnings: parsed.warnings,
+    counts: ['create', 'update', 'skip', 'error'].reduce((o, k) => ({ ...o, [k]: parsed.rows.filter((r) => r.action === k).length }), {}),
+    newTeams: [...new Set(parsed.rows.filter((r) => r.newTeam && createTeams).map((r) => r.teamName))],
+    rows: parsed.rows.map((r) => ({ line: r.line, email: r.email, name: r.name, staffNumber: r.staffNumber, team: r.teamName, role: r.role || defaultRole, jobTitle: r.jobTitle, action: r.action, errors: r.errors })),
+  };
+  if (query.dryRun === '1') return { preview };
+
+  const summary = { created: 0, updated: 0, skipped: 0, accountsCreated: 0, teamsCreated: [], credentials: [] };
+  const touched = new Set();
+  for (const r of parsed.rows) {
+    if (r.action === 'error' || r.action === 'skip') {
+      summary.skipped++;
+      continue;
+    }
+    let teamId = null;
+    if (r.teamName) {
+      let team = db.teams.find((t) => lc(t.name) === lc(r.teamName));
+      if (!team) {
+        db.teams.push((team = { id: nextId(), name: r.teamName, sortOrder: Math.max(-1, ...db.teams.map((t) => t.sortOrder)) + 1, establishment: 0, minStrength: null, color: null }));
+        summary.teamsCreated.push(r.teamName);
+      }
+      teamId = team.id;
+      touched.add(teamId);
+    }
+    let person = byEmail(r.email) || (r.staffNumber ? byStaff(r.staffNumber) : null);
+    const position = r.position ?? Math.max(-1, ...db.people.filter((p) => p.teamId === teamId).map((p) => p.sortOrder)) + 1;
+    const fields = { email: r.email, name: r.name, initials: r.initials || null, teamId, sortOrder: position, active: true };
+    if (person) {
+      Object.assign(person, fields);
+      if (r.mobile) person.mobile = r.mobile;
+      if (r.jobTitle) person.jobTitle = r.jobTitle;
+      if (r.startDate) person.startDate = r.startDate;
+      if (r.staffNumber) person.staffNumber = r.staffNumber;
+      summary.updated++;
+    } else {
+      let staffNumber = r.staffNumber;
+      for (let n = db.people.length + 1; !staffNumber; n++) {
+        const sn = 'U' + String(n).padStart(5, '0');
+        if (!byStaff(sn)) staffNumber = sn;
+      }
+      db.people.push((person = { id: nextId(), staffNumber, ...fields, mobile: r.mobile || null, jobTitle: r.jobTitle || null, startDate: r.startDate }));
+      summary.created++;
+    }
+    const rec = (db.pacc[person.id] ??= {});
+    for (const [aid, val] of Object.entries(r.acc)) {
+      if (!val) delete rec[aid];
+      else rec[aid] = val.e ? { v: val.v, e: val.e } : { v: val.v };
+    }
+    const existing = db.users.find((x) => x.personId === person.id) || db.users.find((x) => lc(x.username) === r.email);
+    if (existing) {
+      existing.personId = person.id;
+      if (r.role) existing.role = r.role;
+    } else {
+      const pw = password || generatePassword();
+      db.users.push({ id: nextId(), username: r.email, password: pw, role: r.role || defaultRole, personId: person.id, mustChangePassword: true });
+      summary.accountsCreated++;
+      if (!password) summary.credentials.push({ email: r.email, name: r.name, password: pw });
+    }
+  }
+  for (const id of touched) {
+    const t = db.teams.find((x) => x.id === id);
+    t.establishment = Math.max(t.establishment, db.people.filter((p) => p.teamId === id && p.active).length);
+  }
+  audit(u, 'user.import', { created: summary.created, updated: summary.updated, skipped: summary.skipped, accountsCreated: summary.accountsCreated, teamsCreated: summary.teamsCreated });
+  changed({ type: 'meta' });
+  return { preview, summary };
+});
+
 // ---------------- Public interface (same as public/js/api.js) ----------------
-export async function api(path, { method = 'GET', body } = {}) {
+export async function api(path, { method = 'GET', body, headers = {} } = {}) {
   const url = new URL(path, 'http://demo');
   const route = routes.find((r) => r.method === method && r.re.test(url.pathname));
   try {
     if (!route) fail(404, 'Not found');
     const params = url.pathname.match(route.re).groups || {};
-    const result = await route.fn({ body: body instanceof Blob ? body : clone(body), query: Object.fromEntries(url.searchParams), params });
+    const result = await route.fn({ body: body instanceof Blob ? body : clone(body), query: Object.fromEntries(url.searchParams), params, headers });
     if (method !== 'GET') save();
     emit({ type: 'online' });
     return clone(result);
@@ -650,6 +768,27 @@ export const put = (p, body) => api(p, { method: 'PUT', body });
 export const del = (p) => api(p, { method: 'DELETE' });
 
 export function download(path) {
+  if (path.startsWith('/users/template')) {
+    // Downloads are blocked here, so show the template's columns to copy instead.
+    const csv = templateCsv(listAccs());
+    const d = dialog(
+      'New users template',
+      html`<p>Downloads are off in this preview. Copy this header row into a new spreadsheet (or a text file saved as .csv), add one row per person, then upload it.</p>
+        <textarea class="copy-src" readonly>${csv}</textarea>
+        <p class="muted">The deployed app downloads an Excel template with dropdowns for team and role, plus an instructions sheet.</p>`,
+      { actions: '<button type="button" class="btn btn-primary" data-copy>Copy header row</button>' },
+    );
+    d.querySelector('[data-copy]').addEventListener('click', async () => {
+      const ta = d.querySelector('textarea');
+      try {
+        await navigator.clipboard.writeText(ta.value);
+        d.querySelector('[data-copy]').textContent = 'Copied';
+      } catch {
+        ta.select();
+      }
+    });
+    return;
+  }
   const what = path.startsWith('/my.ics') ? 'your duties as a calendar file (.ics) to add to your phone or Outlook calendar' : 'the plan as a colour-coded Excel workbook in the same layout used for import';
   dialog('Downloads are off in this preview', html`<p>In the deployed app this button downloads ${what}.</p><p class="muted">This preview runs entirely in your browser, which can't save files.</p>`);
 }

@@ -62,7 +62,7 @@ async function people(body, params) {
       <span class="spacer"></span>
       <button class="btn btn-primary" data-act="add">Add person</button>
     </div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>Staff no</th><th>Name</th><th>Initials</th><th>Team</th><th>Mobile</th><th>Login</th><th></th></tr></thead><tbody></tbody></table></div>`;
+    <div class="table-wrap"><table class="data"><thead><tr><th>Staff no</th><th>Name</th><th>Initials</th><th>Team</th><th>Job title</th><th>Mobile</th><th>Email</th><th>Login</th><th></th></tr></thead><tbody></tbody></table></div>`;
 
   const load = async () => {
     list = (await get('/people')).people;
@@ -71,16 +71,16 @@ async function people(body, params) {
   const draw = () => {
     const rows = list.filter(
       (p) =>
-        (!q || `${p.name} ${p.staffNumber} ${p.initials}`.toLowerCase().includes(q)) &&
+        (!q || `${p.name} ${p.staffNumber} ${p.initials} ${p.email || ''}`.toLowerCase().includes(q)) &&
         (!team || (team === 'none' ? !p.teamId : p.teamId === Number(team))),
     );
     $('tbody', body).innerHTML = html`${rows.map(
       (p) => html`<tr class="${p.active ? '' : 'inactive'}">
         <td>${p.staffNumber}</td><td>${p.name}${p.active ? '' : html` <small class="muted">(inactive)</small>`}</td><td>${p.initials || ''}</td>
-        <td>${state.teamMap.get(p.teamId)?.name || '–'}</td><td>${p.mobile || ''}</td><td>${p.username || html`<span class="muted">–</span>`}</td>
+        <td>${state.teamMap.get(p.teamId)?.name || '–'}</td><td>${p.jobTitle || ''}</td><td>${p.mobile || ''}</td><td>${p.email || ''}</td><td>${p.username || html`<span class="muted">–</span>`}</td>
         <td class="actions"><button class="btn btn-sm" data-edit="${p.id}">Edit</button></td></tr>`,
     )}`;
-    if (!rows.length) $('tbody', body).innerHTML = '<tr><td colspan="7" class="empty">No people</td></tr>';
+    if (!rows.length) $('tbody', body).innerHTML = '<tr><td colspan="9" class="empty">No people</td></tr>';
   };
   body.addEventListener('input', debounce((e) => {
     if (e.target.dataset.f === 'q') {
@@ -114,6 +114,9 @@ async function people(body, params) {
         <label>Name<input name="name" value="${p?.name || ''}" required maxlength="150" /></label>
         <label>Initials<input name="initials" value="${p?.initials || ''}" maxlength="10" /></label>
         <label>Mobile<input name="mobile" type="tel" value="${p?.mobile || ''}" maxlength="30" /></label>
+        <label>Email<input name="email" type="email" value="${p?.email || ''}" maxlength="200" /></label>
+        <label>Job title<input name="jobTitle" value="${p?.jobTitle || ''}" maxlength="100" /></label>
+        <label>Start date<input name="startDate" type="date" value="${p?.startDate || ''}" /></label>
         <label>Team<select name="teamId"><option value="">No team</option>${state.meta.teams.map((t) => html`<option value="${t.id}" ${p?.teamId === t.id ? 'selected' : ''}>${t.name}</option>`)}</select></label>
         <label>Position in team<input name="sortOrder" type="number" value="${p?.sortOrder ?? 0}" /></label>
         <label class="check span2"><input type="checkbox" name="active" ${!p || p.active ? 'checked' : ''} /> Active (shown on the plan)</label>
@@ -382,8 +385,9 @@ async function users(body) {
   body.innerHTML = html`
     <div class="toolbar"><h2>User accounts</h2><span class="spacer"></span>
       <button class="btn" data-act="bulk">Create logins for everyone (${unlinked})</button>
+      <button class="btn" data-act="import">Import users</button>
       <button class="btn btn-primary" data-act="add">Add user</button></div>
-    <p class="muted">Staff sign in with their staff number. Planners can edit the plan; admins can also manage accounts. Linking an account to a person shows them "My duties".</p>
+    <p class="muted">People sign in with their email address or staff number. To add many new people at once, use <b>Import users</b> with the template. Planners can edit the plan; admins can also manage accounts. Linking an account to a person shows them "My duties".</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>Username</th><th>Role</th><th>Person</th><th>Status</th><th></th></tr></thead>
     <tbody>${list.map(
       (u) => html`<tr><td>${u.username}</td><td>${u.role}</td><td>${u.personName || html`<span class="muted">–</span>`}</td>
@@ -394,6 +398,7 @@ async function users(body) {
   body.onclick = async (e) => {
     const act = e.target.closest('[data-act]')?.dataset.act;
     const id = e.target.closest('[data-edit]')?.dataset.edit;
+    if (act === 'import') return importUsers(reload);
     if (act === 'add')
       formDialog(
         'Add user',
@@ -450,6 +455,137 @@ async function users(body) {
   };
 }
 
+// ---------------- Bulk user import ----------------
+function importUsers(onDone) {
+  const d = dialog(
+    'Import users',
+    html`<div class="import-users">
+      <section class="step">
+        <h3><span class="step-n">1</span> Download the template</h3>
+        <p class="muted">One row per person. Email and name are required; it also has staff number, initials, mobile, team, position in team, job title,
+          start date, app role and a column for each accreditation. The Excel version has dropdowns and an instructions sheet.</p>
+        <div class="row-btns">
+          <button type="button" class="btn" data-dl="xlsx">Excel template (.xlsx)</button>
+          <button type="button" class="btn" data-dl="csv">CSV template (.csv)</button>
+        </div>
+      </section>
+      <section class="step">
+        <h3><span class="step-n">2</span> Upload the completed file</h3>
+        <label>Completed template<input type="file" name="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" /></label>
+        <div class="form-grid">
+          <label>Role if "App role" is blank<select name="defaultRole"><option>staff</option><option>planner</option><option>admin</option></select></label>
+          <label>Dates written as<select name="dateOrder"><option value="dmy">Day/Month/Year</option><option value="mdy">Month/Day/Year</option></select></label>
+          <label class="span2">Temporary password <small class="muted">(optional - leave blank to generate a different one for each person)</small>
+            <input name="tempPassword" type="text" minlength="8" autocomplete="off" placeholder="Generate one per person" /></label>
+          <label class="check span2"><input type="checkbox" name="createTeams" checked /> Create teams that don't exist yet</label>
+          <label class="check span2"><input type="checkbox" name="updateExisting" checked /> Update people who are already in the app (matched on email, then staff number)</label>
+        </div>
+        <div class="row-btns"><button type="button" class="btn btn-primary" data-act="check">Check file</button></div>
+      </section>
+      <section class="step" data-step="3" hidden></section>
+    </div>`,
+    { wide: true },
+  );
+  const f = $('form', d);
+  const step3 = $('[data-step="3"]', d);
+  let checkedFile = null;
+  const send = (dryRun) => {
+    const file = f.file.files[0];
+    if (!file) throw new Error('Choose the completed template first');
+    const pw = f.tempPassword.value.trim();
+    if (pw && pw.length < 8) throw new Error('Temporary password must be at least 8 characters');
+    const qs = new URLSearchParams({
+      dryRun: dryRun ? '1' : '0',
+      createTeams: f.createTeams.checked ? '1' : '0',
+      updateExisting: f.updateExisting.checked ? '1' : '0',
+      defaultRole: f.defaultRole.value,
+      dateOrder: f.dateOrder.value,
+    });
+    const headers = { 'Content-Type': 'application/octet-stream' };
+    if (pw) headers['X-Temp-Password'] = pw;
+    return api(`/users/import?${qs}`, { method: 'POST', body: file, headers });
+  };
+  const badge = (a) => html`<span class="badge badge-${a}">${{ create: 'New', update: 'Update', skip: 'Skip', error: 'Error' }[a]}</span>`;
+
+  d.addEventListener('click', async (e) => {
+    const dl = e.target.closest('[data-dl]')?.dataset.dl;
+    if (dl) return download(`/users/template.${dl}`);
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'check') {
+      step3.hidden = false;
+      step3.innerHTML = '<p class="muted">Checking…</p>';
+      try {
+        const { preview: p } = await send(true);
+        checkedFile = f.file.files[0];
+        requestAnimationFrame(() => step3.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+        const ok = p.counts.create + p.counts.update;
+        step3.innerHTML = html`
+          <h3><span class="step-n">3</span> Check and import</h3>
+          <div class="chips">
+            <span>${badge('create')} ${p.counts.create} new</span>
+            <span>${badge('update')} ${p.counts.update} to update</span>
+            ${p.counts.skip ? html`<span>${badge('skip')} ${p.counts.skip} skipped</span>` : ''}
+            ${p.counts.error ? html`<span>${badge('error')} ${p.counts.error} with problems (not imported)</span>` : ''}
+          </div>
+          ${p.newTeams.length ? html`<p>New teams to be created: <b>${p.newTeams.join(', ')}</b></p>` : ''}
+          ${p.warnings.length ? html`<ul class="warn">${p.warnings.map((w) => html`<li>${w}</li>`)}</ul>` : ''}
+          <div class="table-wrap preview-table"><table class="data">
+            <thead><tr><th>Row</th><th></th><th>Email</th><th>Name</th><th>Team</th><th>Role</th><th>Problems</th></tr></thead>
+            <tbody>${p.rows.map(
+              (r) => html`<tr class="${r.action === 'error' ? 'row-error' : ''}"><td>${r.line}</td><td>${badge(r.action)}</td><td>${r.email}</td><td>${r.name}</td>
+                <td>${r.team || '–'}</td><td>${r.role}</td><td class="details">${r.errors.join('; ')}</td></tr>`,
+            )}</tbody></table></div>
+          <div class="row-btns">
+            <button type="button" class="btn btn-primary" data-act="commit" ${ok ? '' : 'disabled'}>Import ${ok} ${ok === 1 ? 'person' : 'people'}</button>
+            ${p.counts.error ? html`<span class="muted">Fix the rows marked Error in your file and check it again, or import the rest now.</span>` : ''}
+          </div>`;
+      } catch (ex) {
+        step3.innerHTML = html`<p class="error">${ex.message}</p>`;
+      }
+    } else if (act === 'commit') {
+      if (f.file.files[0] !== checkedFile) return toast('The file changed - check it again first', 'warn');
+      e.target.disabled = true;
+      try {
+        const { summary: s } = await send(false);
+        await refreshMeta();
+        const tsv = ['Email\tName\tTemporary password', ...s.credentials.map((c) => `${c.email}\t${c.name}\t${c.password}`)].join('\n');
+        step3.innerHTML = html`
+          <h3>Import complete</h3>
+          <p class="success">${s.created} people added, ${s.updated} updated, ${s.accountsCreated} new sign-in accounts${s.skipped ? `, ${s.skipped} ${s.skipped === 1 ? 'row' : 'rows'} skipped` : ''}.
+            ${s.teamsCreated.length ? html`New teams: ${s.teamsCreated.join(', ')}.` : ''}</p>
+          ${s.credentials.length
+            ? html`<p><b>Temporary passwords</b> - copy these now and share them securely; they won't be shown again. Everyone signs in with their email address
+                and must choose a new password straight away.</p>
+              <div class="table-wrap preview-table"><table class="data"><thead><tr><th>Email</th><th>Name</th><th>Temporary password</th></tr></thead>
+              <tbody>${s.credentials.map((c) => html`<tr><td>${c.email}</td><td>${c.name}</td><td><code>${c.password}</code></td></tr>`)}</tbody></table></div>
+              <div class="row-btns"><button type="button" class="btn" data-act="copy">Copy list (paste into Excel)</button></div>
+              <textarea class="copy-src" readonly hidden>${tsv}</textarea>`
+            : s.accountsCreated
+              ? html`<p>New accounts use the temporary password you entered. People sign in with their email address and must change it straight away.</p>`
+              : ''}`;
+        step3.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        onDone();
+      } catch (ex) {
+        e.target.disabled = false;
+        toast(ex.message, 'error');
+      }
+    } else if (act === 'copy') {
+      const ta = $('.copy-src', d);
+      try {
+        await navigator.clipboard.writeText(ta.value);
+        toast('Copied', 'success');
+      } catch {
+        ta.hidden = false;
+        ta.select();
+        toast('Press Ctrl+C to copy', 'warn');
+      }
+    }
+  });
+  f.addEventListener('submit', (e) => {
+    if (e.submitter?.value !== 'cancel') e.preventDefault();
+  });
+}
+
 // ---------------- Audit ----------------
 async function audit(body) {
   const { entries } = await get('/audit?limit=500');
@@ -458,6 +594,7 @@ async function audit(body) {
     if (!d) return '';
     if (e.action === 'assignments.update') return `${d.count} cell(s) ${d.from}${d.to !== d.from ? ` to ${d.to}` : ''}`;
     if (e.action === 'assignments.pattern') return `${d.personIds.length} people, ${d.from} to ${d.to}: ${d.pattern.map((x) => x || '-').join(' ')}`;
+    if (e.action === 'user.import') return `${d.created} added, ${d.updated} updated, ${d.accountsCreated} accounts`;
     if (e.action === 'import') return `${d.mode}: ${d.peopleCreated} added, ${d.peopleUpdated} updated, ${d.assignments} duties`;
     return JSON.stringify(d).slice(0, 160);
   };
