@@ -14,7 +14,8 @@
     "seed:demo": "node --disable-warning=ExperimentalWarning scripts/seed-demo.js",
     "create-admin": "node --disable-warning=ExperimentalWarning scripts/create-admin.js",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.js\"",
-    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js"
+    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js",
+    "build:demo": "node scripts/build-demo.mjs"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
@@ -22,5 +23,8 @@
   },
   "overrides": {
     "uuid": "^11.1.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
   }
 }

@@ -596,6 +596,21 @@ fieldset {
 .auth-card p {
   margin: 0;
 }
+.demo-logins {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.demo-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.small {
+  font-size: 12px;
+}
 
 /* ---------- Toolbar ---------- */
 .toolbar {
@@ -1292,4 +1307,15 @@ table.data tr.inactive td {
   .grid-wrap {
     overflow: visible;
   }
+}
+
+.dlg header .icon-btn {
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.dlg header .icon-btn:hover {
+  background: var(--surface-2);
 }

@@ -1,5 +1,5 @@
 // Management screens for planners and admins.
-import { api, get, post, put, del } from '../api.js';
+import { api, get, post, put, del, download } from '../api.js';
 import { state, isAdmin, loadMeta, loadRoster } from '../state.js';
 import { $, html, toast, dialog, confirmDialog, contrast, todayIso, addDays, debounce } from '../util.js';
 
@@ -369,7 +369,7 @@ function importExport(body) {
   $('[data-form=export]', body).addEventListener('submit', (e) => {
     e.preventDefault();
     const f = e.target;
-    location.href = `/api/export.xlsx?from=${f.from.value}&to=${f.to.value}`;
+    download(`/export.xlsx?from=${f.from.value}&to=${f.to.value}`);
   });
 }
 

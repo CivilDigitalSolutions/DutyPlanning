@@ -1,6 +1,9 @@
 import { get, post, onApiEvent } from './api.js';
+import { currentRoute, go, replaceRoute, onRoute } from './router.js';
 import { state, loadMeta, isPlanner } from './state.js';
 import { $, $$, html, toast, fmtDate, store } from './util.js';
+
+const DEMO = !!window.DP_DEMO;
 import { renderLogin, renderChangePassword } from './views/login.js';
 
 const views = {
@@ -14,14 +17,11 @@ let cleanup = null;
 let routeToken = 0;
 
 function parseRoute() {
-  const [name, ...params] = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  const [name, ...params] = currentRoute().replace(/^#\/?/, '').split('/').filter(Boolean);
   return { name: name || null, params };
 }
 
-export function navigate(hash) {
-  if (location.hash === hash) route();
-  else location.hash = hash;
-}
+export const navigate = go;
 
 function defaultRoute() {
   return isPlanner() || !state.user?.person ? '#/plan' : '#/me';
@@ -45,7 +45,7 @@ async function route() {
   }
   let { name, params } = parseRoute();
   if (!views[name] || (name === 'admin' && !isPlanner())) {
-    history.replaceState(null, '', defaultRoute());
+    replaceRoute(defaultRoute());
     ({ name, params } = parseRoute());
   }
   $$('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === name));
@@ -85,6 +85,7 @@ function renderShell() {
           <div class="menu-head"><strong>${u.person?.name || u.username}</strong><small>${u.username} · ${u.role}</small></div>
           <button class="menu-item" data-act="theme">Toggle dark mode</button>
           <button class="menu-item" data-act="password">Change password</button>
+          ${DEMO ? html`<button class="menu-item" data-act="reset">Reset demo data</button>` : ''}
           <button class="menu-item" data-act="logout">Sign out</button>
         </div>
       </details>
@@ -102,12 +103,23 @@ function renderShell() {
     if (act === 'logout') {
       await post('/auth/logout').catch(() => {});
       await clearDataCaches();
-      location.hash = '';
-      location.reload();
+      if (DEMO) {
+        state.user = null;
+        replaceRoute('#/');
+        boot();
+      } else {
+        location.hash = '';
+        location.reload();
+      }
     } else if (act === 'password') {
       if (cleanup) cleanup();
       cleanup = null;
       renderChangePassword($('#view'), { onDone: () => route() });
+    } else if (act === 'reset') {
+      window.DP_DEMO_RESET?.();
+      await loadMeta();
+      toast('Demo data reset', 'success');
+      route();
     } else if (act === 'theme') {
       const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       const next = cur === 'dark' ? 'light' : 'dark';
@@ -130,18 +142,19 @@ async function clearDataCaches() {
 
 // ---- Live updates via Server-Sent Events ----
 let es = null;
+async function serverEvent(ev) {
+  if (ev.type === 'meta') await loadMeta().catch(() => {});
+  window.dispatchEvent(new CustomEvent('dp:changed', { detail: ev }));
+}
 function connectEvents() {
-  if (es || !('EventSource' in window)) return;
+  if (DEMO || es || !('EventSource' in window)) return;
   es = new EventSource('/api/events');
-  es.onmessage = async (msg) => {
-    let ev;
+  es.onmessage = (msg) => {
     try {
-      ev = JSON.parse(msg.data);
+      serverEvent(JSON.parse(msg.data));
     } catch {
-      return;
+      /* ignore malformed event */
     }
-    if (ev.type === 'meta') await loadMeta().catch(() => {});
-    window.dispatchEvent(new CustomEvent('dp:changed', { detail: ev }));
   };
 }
 
@@ -153,7 +166,8 @@ function setBanner(text) {
 }
 
 onApiEvent((e) => {
-  if (e.type === 'unauthorized' && state.user) {
+  if (e.type === 'changed') serverEvent(e.detail);
+  else if (e.type === 'unauthorized' && state.user) {
     state.user = null;
     boot();
   } else if (e.type === 'password-change' && state.user) {
@@ -206,16 +220,16 @@ async function boot() {
   }
   renderShell();
   connectEvents();
-  if (!location.hash || location.hash === '#/') history.replaceState(null, '', defaultRoute());
+  if (currentRoute() === '#/') replaceRoute(defaultRoute());
   route();
 }
 
-window.addEventListener('hashchange', route);
+onRoute(route);
 
 const theme = store.get('theme');
 if (theme) document.documentElement.dataset.theme = theme;
 
-if ('serviceWorker' in navigator) {
+if (!DEMO && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').then((reg) => {
     reg.addEventListener('updatefound', () => {
       const w = reg.installing;

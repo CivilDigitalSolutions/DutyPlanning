@@ -58,6 +58,14 @@ Open http://localhost:3000. The demo logins are `admin / admin1234`, `planner / 
 npm test                   # API and spreadsheet parser tests
 ```
 
+### Standalone demo build
+
+```bash
+npm run build:demo        # -> dist/duty-planning-demo.html
+```
+
+This produces one self-contained HTML file that runs the whole app in the browser with sample data and no server. The API is swapped for an in-browser mock (`demo/mock-api.js`) that applies the same rules, and data is saved in that browser's local storage. Use it to share a preview. File downloads (Excel export, calendar file), live updates and offline caching are switched off in this build.
+
 ## Deploying to AWS (EC2)
 
 The app is a single Node.js process with a SQLite database file. A small instance is plenty: a `t3.small` handles thousands of staff.
@@ -144,6 +152,7 @@ docker compose exec app node --disable-warning=ExperimentalWarning scripts/creat
 
 ```
 server/        Express API, auth, SQLite schema, spreadsheet import/export
+demo/          In-browser mock API and sample data for the standalone demo build
 public/        The PWA (no build step): index.html, sw.js, manifest, css/, js/views/
 scripts/       Demo data, backup, admin reset, icon generation
 deploy/        Caddyfile, nginx config, systemd unit

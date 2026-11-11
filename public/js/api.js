@@ -46,3 +46,8 @@ export const get = (p) => api(p);
 export const post = (p, body) => api(p, { method: 'POST', body: body ?? {} });
 export const put = (p, body) => api(p, { method: 'PUT', body });
 export const del = (p) => api(p, { method: 'DELETE' });
+
+/** Start a file download from the API (e.g. the Excel export). */
+export function download(path) {
+  location.href = '/api' + path;
+}

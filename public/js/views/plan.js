@@ -1,5 +1,5 @@
 // The planning grid: teams grouped down the side, dates across the top.
-import { put, post } from '../api.js';
+import { put, post, download } from '../api.js';
 import { state, isPlanner, loadRoster, codeInfo, onDuty, accStatus } from '../state.js';
 import { $, $$, esc, html, toast, dialog, addDays, eachDate, startOfWeek, todayIso, fmtDate, dayNum, isWeekend, contrast, debounce, store, daysBetween } from '../util.js';
 
@@ -768,7 +768,7 @@ export async function render(root) {
         e.preventDefault();
         return toast('Export is limited to 400 days', 'error');
       }
-      location.href = `/api/export.xlsx?from=${f.from.value}&to=${f.to.value}${v.teams.length ? `&teams=${v.teams.join(',')}` : ''}`;
+      download(`/export.xlsx?from=${f.from.value}&to=${f.to.value}${v.teams.length ? `&teams=${v.teams.join(',')}` : ''}`);
     });
   }
 

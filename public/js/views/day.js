@@ -1,4 +1,5 @@
 // Day view: who is doing what on a given date, grouped by team and by duty.
+import { replaceRoute } from '../router.js';
 import { state, loadRoster, codeInfo, onDuty, accStatus } from '../state.js';
 import { $, html, addDays, todayIso, fmtDate, contrast } from '../util.js';
 
@@ -35,7 +36,7 @@ export async function render(root, params) {
 
   let data = null;
   async function load() {
-    history.replaceState(null, '', `#/day/${date}`);
+    replaceRoute(`#/day/${date}`);
     $('.date-jump', root).value = date;
     $('.day-title', root).textContent = fmtDate(date, 'long');
     $('.day-body', root).innerHTML = '<p class="muted">Loading…</p>';

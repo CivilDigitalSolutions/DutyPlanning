@@ -12,9 +12,26 @@ export function renderLogin(root, { onDone }) {
         <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
         <p class="error" role="alert" hidden></p>
         <button class="btn btn-primary btn-block">Sign in</button>
+        ${window.DP_DEMO
+          ? html`<div class="demo-logins">
+              <p class="muted">This is a demo with sample teams. Choose a role to look around:</p>
+              <div class="demo-buttons">
+                <button type="button" class="btn" data-demo="planner|planner1234">Planner</button>
+                <button type="button" class="btn" data-demo="1001|staff1234">Staff member</button>
+                <button type="button" class="btn" data-demo="admin|admin1234">Admin</button>
+              </div>
+              <p class="muted small">Changes you make are saved in this browser only.</p>
+            </div>`
+          : ''}
       </form>
     </main>`;
   const form = $('form', root);
+  form.addEventListener('click', (e) => {
+    const d = e.target.closest('[data-demo]')?.dataset.demo;
+    if (!d) return;
+    [form.username.value, form.password.value] = d.split('|');
+    form.requestSubmit();
+  });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const err = $('.error', form);

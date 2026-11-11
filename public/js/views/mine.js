@@ -1,4 +1,5 @@
 // "My duties" - a phone friendly personal view.
+import { download } from '../api.js';
 import { state, loadRoster, codeInfo, onDuty } from '../state.js';
 import { $, html, addDays, eachDate, startOfWeek, todayIso, fmtDate, dayNum, contrast } from '../util.js';
 
@@ -26,7 +27,7 @@ export async function render(root) {
           <h1>${me.name}</h1>
           <p class="muted">${state.teamMap.get(me.teamId)?.name || 'No team'} · ${me.staffNumber}</p>
         </div>
-        <a class="btn" href="/api/my.ics" download>Add to calendar</a>
+        <button class="btn" data-act="ics">Add to calendar</button>
       </div>
       <div class="stats"></div>
       <div class="weeks"></div>
@@ -77,6 +78,7 @@ export async function render(root) {
   }
 
   root.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-act=ics]')) return download('/my.ics');
     if (e.target.closest('.more')) {
       end = addDays(end, 84);
       return load();
