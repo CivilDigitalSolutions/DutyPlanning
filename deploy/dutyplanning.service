@@ -1,0 +1,24 @@
+# systemd unit for running without Docker.
+# sudo cp deploy/dutyplanning.service /etc/systemd/system/ && sudo systemctl enable --now dutyplanning
+[Unit]
+Description=Duty Planning PWA
+After=network.target
+
+[Service]
+Type=simple
+User=dutyplanning
+WorkingDirectory=/opt/dutyplanning
+EnvironmentFile=/opt/dutyplanning/.env
+Environment=NODE_ENV=production
+Environment=DB_FILE=/var/lib/dutyplanning/dutyplanning.db
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server/index.js
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/dutyplanning
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

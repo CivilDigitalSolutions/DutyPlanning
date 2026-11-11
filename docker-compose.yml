@@ -1,0 +1,38 @@
+# Production stack: the app plus Caddy, which obtains and renews an HTTPS
+# certificate automatically (HTTPS is required for the PWA to install).
+# 1. Point a DNS record (e.g. duties.example.org) at the instance's Elastic IP.
+# 2. cp .env.example .env and edit it.
+# 3. docker compose up -d --build
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DB_FILE: /data/dutyplanning.db
+      TRUST_PROXY: uniquelocal
+    volumes:
+      - app-data:/data
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  app-data:
+  caddy-data:
+  caddy-config:
