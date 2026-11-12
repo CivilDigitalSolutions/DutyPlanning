@@ -15,6 +15,8 @@ const SHELL_FILES = [
   '/js/views/mine.js',
   '/js/views/day.js',
   '/js/views/admin.js',
+  '/js/views/leave.js',
+  '/js/router.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',
   '/icons/icon-192.png',

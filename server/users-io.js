@@ -149,14 +149,17 @@ export function applyUserImport(db, parsed, { createTeams = true, updateExisting
         pid = person.id;
         db.prepare(
           `UPDATE people SET email=?, name=?, initials=?, mobile=COALESCE(?, mobile), team_id=?, sort_order=?, job_title=COALESCE(?, job_title),
-             start_date=COALESCE(?, start_date), staff_number=COALESCE(?, staff_number), active=1 WHERE id=?`,
-        ).run(row.email, row.name, row.initials || null, row.mobile || null, teamId, position, row.jobTitle || null, row.startDate, row.staffNumber || null, pid);
+             start_date=COALESCE(?, start_date), staff_number=COALESCE(?, staff_number), leave_allowance=COALESCE(?, leave_allowance), active=1 WHERE id=?`,
+        ).run(row.email, row.name, row.initials || null, row.mobile || null, teamId, position, row.jobTitle || null, row.startDate, row.staffNumber || null, row.leaveAllowance, pid);
         summary.updated++;
       } else {
         pid = Number(
           db
-            .prepare('INSERT INTO people (staff_number, name, initials, mobile, team_id, sort_order, email, job_title, start_date, active) VALUES (?,?,?,?,?,?,?,?,?,1)')
-            .run(row.staffNumber || nextStaffNo(), row.name, row.initials || null, row.mobile || null, teamId, position, row.email, row.jobTitle || null, row.startDate).lastInsertRowid,
+            .prepare(
+              'INSERT INTO people (staff_number, name, initials, mobile, team_id, sort_order, email, job_title, start_date, leave_allowance, active) VALUES (?,?,?,?,?,?,?,?,?,?,1)',
+            )
+            .run(row.staffNumber || nextStaffNo(), row.name, row.initials || null, row.mobile || null, teamId, position, row.email, row.jobTitle || null, row.startDate, row.leaveAllowance)
+            .lastInsertRowid,
         );
         summary.created++;
       }
@@ -179,6 +182,18 @@ export function applyUserImport(db, parsed, { createTeams = true, updateExisting
         if (pw) summary.credentials.push({ email: row.email, name: row.name, password: pw });
       }
     }
+
+    // Line managers last, so a manager can appear anywhere in the same file.
+    summary.managersNotFound = [];
+    for (const row of parsed.rows) {
+      if (row.errors.length || !row.lineManagerEmail) continue;
+      const m = findByEmail.get(row.lineManagerEmail);
+      const p = findByEmail.get(row.email);
+      if (!p) continue;
+      if (!m) summary.managersNotFound.push(row.lineManagerEmail);
+      else db.prepare('UPDATE people SET line_manager_id = ? WHERE id = ?').run(m.id, p.id);
+    }
+    summary.managersNotFound = [...new Set(summary.managersNotFound)];
 
     // Keep establishment at least as large as the number of people, so new starters fill vacancies.
     for (const id of touchedTeams) {

@@ -78,6 +78,39 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS leave_requests (
+  id INTEGER PRIMARY KEY,
+  person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  type_code TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  end_date TEXT NOT NULL,
+  days INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_by INTEGER,
+  decided_by INTEGER,
+  decided_at TEXT,
+  decision_note TEXT,
+  applied_by INTEGER,
+  applied_at TEXT,
+  applied_code TEXT,
+  applied_snapshot TEXT
+);
+CREATE INDEX IF NOT EXISTS leave_person ON leave_requests(person_id, start_date);
+CREATE INDEX IF NOT EXISTS leave_status ON leave_requests(status);
+
+CREATE TABLE IF NOT EXISTS leave_events (
+  id INTEGER PRIMARY KEY,
+  request_id INTEGER NOT NULL REFERENCES leave_requests(id) ON DELETE CASCADE,
+  at TEXT NOT NULL DEFAULT (datetime('now')),
+  user_id INTEGER,
+  username TEXT,
+  action TEXT NOT NULL,
+  note TEXT
+);
+CREATE INDEX IF NOT EXISTS leave_events_req ON leave_events(request_id);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY,
   at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -110,6 +143,10 @@ function migrate(db) {
   if (!cols.has('job_title')) db.exec('ALTER TABLE people ADD COLUMN job_title TEXT');
   if (!cols.has('start_date')) db.exec('ALTER TABLE people ADD COLUMN start_date TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS people_email ON people(email COLLATE NOCASE) WHERE email IS NOT NULL');
+  if (!cols.has('line_manager_id')) db.exec('ALTER TABLE people ADD COLUMN line_manager_id INTEGER REFERENCES people(id) ON DELETE SET NULL');
+  if (!cols.has('leave_allowance')) db.exec('ALTER TABLE people ADD COLUMN leave_allowance REAL');
+  const ucols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
+  if (!ucols.has('leave_admin')) db.exec('ALTER TABLE users ADD COLUMN leave_admin INTEGER NOT NULL DEFAULT 0');
 }
 
 /** Run fn inside a transaction. */

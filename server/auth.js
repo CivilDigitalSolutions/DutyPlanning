@@ -49,12 +49,12 @@ export function sessionUser(db, token) {
   if (!token) return null;
   const row = db
     .prepare(
-      `SELECT u.id, u.username, u.role, u.person_id AS personId, u.must_change_password AS mustChangePassword, s.expires_at AS expiresAt
+      `SELECT u.id, u.username, u.role, u.person_id AS personId, u.must_change_password AS mustChangePassword, u.leave_admin AS leaveAdmin, s.expires_at AS expiresAt
        FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`,
     )
     .get(sha256(token));
   if (!row || row.expiresAt < Date.now()) return null;
-  return { ...row, mustChangePassword: !!row.mustChangePassword };
+  return { ...row, mustChangePassword: !!row.mustChangePassword, leaveAdmin: !!row.leaveAdmin };
 }
 
 export function parseCookies(header) {

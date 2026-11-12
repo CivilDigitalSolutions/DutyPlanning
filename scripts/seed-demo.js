@@ -20,7 +20,7 @@ const from = addDays(today, -14);
 const to = addDays(today, 120);
 
 tx(db, () => {
-  db.exec('DELETE FROM assignments; DELETE FROM person_accreditations; DELETE FROM people; DELETE FROM teams; DELETE FROM accreditations;');
+  db.exec('DELETE FROM leave_events; DELETE FROM leave_requests; DELETE FROM assignments; DELETE FROM person_accreditations; DELETE FROM people; DELETE FROM teams; DELETE FROM accreditations;');
   const accs = [
     ['FA', 'First Aid'],
     ['DRV', 'Response Driver'],
@@ -66,6 +66,36 @@ tx(db, () => {
     }
   });
 
+  // Line managers: the first person in each team manages the rest; team leads report to no one (admins approve).
+  for (const t of db.prepare('SELECT id FROM teams').all()) {
+    const members = db.prepare('SELECT id FROM people WHERE team_id = ? ORDER BY sort_order').all(t.id);
+    const lead = members[0]?.id;
+    for (const m of members.slice(1)) db.prepare('UPDATE people SET line_manager_id = ? WHERE id = ?').run(lead, m.id);
+  }
+  db.prepare('UPDATE people SET leave_allowance = 25').run();
+
+  // Sample leave requests at each stage of the workflow.
+  const pid = (sn) => db.prepare('SELECT id FROM people WHERE staff_number = ?').get(sn).id;
+  const workDays = (p, a, b) => db.prepare("SELECT COUNT(*) AS n FROM assignments WHERE person_id = ? AND date BETWEEN ? AND ? AND code <> 'RD'").get(p, a, b).n;
+  const leave = (sn, startOffset, len, status, note) => {
+    const p = pid(sn);
+    const a = addDays(today, startOffset);
+    const b = addDays(a, len - 1);
+    const id = Number(
+      db
+        .prepare("INSERT INTO leave_requests (person_id, type_code, start_date, end_date, days, note, status, decided_at, decision_note) VALUES (?, 'AL', ?, ?, ?, ?, ?, ?, ?)")
+        .run(p, a, b, workDays(p, a, b), note, status, status === 'pending' ? null : new Date().toISOString(), status === 'rejected' ? 'Team is already short that week' : null).lastInsertRowid,
+    );
+    db.prepare("INSERT INTO leave_events (request_id, username, action, note) VALUES (?, ?, 'requested', ?)").run(id, sn, note);
+    if (status !== 'pending') db.prepare('INSERT INTO leave_events (request_id, username, action, note) VALUES (?, ?, ?, ?)').run(id, 'manager', status === 'rejected' ? 'reject' : 'approve', null);
+  };
+  leave('1003', 21, 7, 'pending', 'Family holiday');
+  leave('1005', 35, 4, 'pending', null);
+  leave('1001', 49, 5, 'pending', 'Long weekend away');
+  leave('1010', 14, 7, 'approved', 'Booked flights');
+  leave('1019', 28, 3, 'approved', null);
+  leave('1006', 10, 2, 'rejected', 'Wedding');
+
   const user = (username, password, role, personId = null) =>
     db
       .prepare(
@@ -75,11 +105,12 @@ tx(db, () => {
       .run(username, hashPassword(password), role, personId);
   user('admin', 'admin1234', 'admin');
   user('planner', 'planner1234', 'planner', db.prepare("SELECT id FROM people WHERE staff_number='1002'").get().id);
+  db.prepare("UPDATE users SET leave_admin = 1 WHERE username = 'planner'").run();
   user('1001', 'staff1234', 'staff', db.prepare("SELECT id FROM people WHERE staff_number='1001'").get().id);
 });
 
 console.log(`Demo data loaded for ${from} to ${to}.`);
-console.log('Logins: admin/admin1234 (admin), planner/planner1234 (planner), 1001/staff1234 (staff)');
+console.log('Logins: admin/admin1234 (admin), planner/planner1234 (planner + leave administrator), 1001/staff1234 (staff, manages Team 1)');
 
 const xi = process.argv.indexOf('--xlsx');
 if (xi > 0) {

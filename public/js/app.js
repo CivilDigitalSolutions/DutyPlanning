@@ -10,6 +10,7 @@ const views = {
   plan: () => import('./views/plan.js'),
   me: () => import('./views/mine.js'),
   day: () => import('./views/day.js'),
+  leave: () => import('./views/leave.js'),
   admin: () => import('./views/admin.js'),
 };
 
@@ -69,13 +70,14 @@ function renderShell() {
     ['plan', '#/plan', 'Plan', '▦'],
     ...(u.person ? [['me', '#/me', 'My duties', '◉']] : []),
     ['day', '#/day', 'Day', '☀'],
+    ['leave', '#/leave', 'Leave', '✈'],
     ...(isPlanner() ? [['admin', '#/admin', 'Manage', '⚙']] : []),
   ];
   $('#app').innerHTML = html`
     <header class="topbar">
       <a class="brand" href="#/" aria-label="Home"><img src="/icons/icon.svg" alt="" width="28" height="28" /><span>${state.meta.orgName}</span></a>
       <nav class="tabs" aria-label="Main">
-        ${nav.map(([k, h, label]) => html`<a href="${h}" data-nav="${k}">${label}</a>`)}
+        ${nav.map(([k, h, label]) => html`<a href="${h}" data-nav="${k}">${label}<span class="nav-count" hidden></span></a>`)}
       </nav>
       <div class="spacer"></div>
       <span id="conn" class="conn" hidden></span>
@@ -93,7 +95,7 @@ function renderShell() {
     <div id="banner" class="banner" hidden></div>
     <main id="view" tabindex="-1"></main>
     <nav class="bottom-nav" aria-label="Main">
-      ${nav.map(([k, h, label, icon]) => html`<a href="${h}" data-nav="${k}"><span aria-hidden="true">${icon}</span>${label}</a>`)}
+      ${nav.map(([k, h, label, icon]) => html`<a href="${h}" data-nav="${k}"><span aria-hidden="true">${icon}</span>${label}<span class="nav-count" hidden></span></a>`)}
     </nav>`;
 
   $('.menu').addEventListener('click', async (e) => {
@@ -142,8 +144,24 @@ async function clearDataCaches() {
 
 // ---- Live updates via Server-Sent Events ----
 let es = null;
+// Badge on the Leave tab: requests waiting for this person to approve or add to the roster.
+async function updateLeaveBadge() {
+  try {
+    const s = await get('/leave/summary');
+    const n = (s.toApprove || 0) + (s.toApply || 0);
+    $$('[data-nav=leave] .nav-count').forEach((el) => {
+      el.hidden = !n;
+      el.textContent = n;
+      el.title = `${n} leave request${n === 1 ? '' : 's'} need your action`;
+    });
+  } catch {
+    /* offline or signed out */
+  }
+}
+
 async function serverEvent(ev) {
   if (ev.type === 'meta') await loadMeta().catch(() => {});
+  if (ev.type === 'leave') updateLeaveBadge();
   window.dispatchEvent(new CustomEvent('dp:changed', { detail: ev }));
 }
 function connectEvents() {
@@ -220,6 +238,7 @@ async function boot() {
   }
   renderShell();
   connectEvents();
+  updateLeaveBadge();
   if (currentRoute() === '#/') replaceRoute(defaultRoute());
   route();
 }

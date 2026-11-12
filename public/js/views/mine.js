@@ -27,7 +27,7 @@ export async function render(root) {
           <h1>${me.name}</h1>
           <p class="muted">${state.teamMap.get(me.teamId)?.name || 'No team'} · ${me.staffNumber}</p>
         </div>
-        <button class="btn" data-act="ics">Add to calendar</button>
+        <div class="row-btns"><a class="btn btn-primary" href="#/leave/mine">Request leave</a><button class="btn" data-act="ics">Add to calendar</button></div>
       </div>
       <div class="stats"></div>
       <div class="weeks"></div>

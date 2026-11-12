@@ -117,6 +117,10 @@ async function people(body, params) {
         <label>Email<input name="email" type="email" value="${p?.email || ''}" maxlength="200" /></label>
         <label>Job title<input name="jobTitle" value="${p?.jobTitle || ''}" maxlength="100" /></label>
         <label>Start date<input name="startDate" type="date" value="${p?.startDate || ''}" /></label>
+        <label>Line manager<select name="lineManagerId"><option value="">None</option>${list
+          .filter((x) => x.active && x.id !== p?.id)
+          .map((x) => html`<option value="${x.id}" ${p?.lineManagerId === x.id ? 'selected' : ''}>${x.name} (${x.staffNumber})</option>`)}</select></label>
+        <label>Annual leave allowance (days)<input name="leaveAllowance" type="number" min="0" max="400" step="0.5" value="${p?.leaveAllowance ?? ''}" placeholder="Not set" /></label>
         <label>Team<select name="teamId"><option value="">No team</option>${state.meta.teams.map((t) => html`<option value="${t.id}" ${p?.teamId === t.id ? 'selected' : ''}>${t.name}</option>`)}</select></label>
         <label>Position in team<input name="sortOrder" type="number" value="${p?.sortOrder ?? 0}" /></label>
         <label class="check span2"><input type="checkbox" name="active" ${!p || p.active ? 'checked' : ''} /> Active (shown on the plan)</label>
@@ -129,7 +133,7 @@ async function people(body, params) {
           : ''}
       </div>`,
       async (v, form) => {
-        const payload = { ...v, active: form.active.checked, teamId: v.teamId || null };
+        const payload = { ...v, active: form.active.checked, teamId: v.teamId || null, lineManagerId: v.lineManagerId || null };
         let id = p?.id;
         if (p) await put(`/people/${p.id}`, payload);
         else id = (await post('/people', payload)).id;
@@ -382,15 +386,26 @@ async function users(body) {
   const personOptions = (sel) =>
     html`<option value="">Not linked</option>${ppl.map((p) => html`<option value="${p.id}" ${sel === p.id ? 'selected' : ''}>${p.name} (${p.staffNumber})</option>`)}`;
   const unlinked = ppl.filter((p) => p.active && !p.username).length;
+  const pById = new Map(ppl.map((p) => [p.id, p]));
+  const managerName = (pid) => pById.get(pById.get(pid)?.lineManagerId)?.name || '';
+  const managerOptions = (pid) => {
+    const cur = pById.get(pid)?.lineManagerId;
+    return html`<option value="">None</option>${ppl
+      .filter((p) => p.active && p.id !== pid)
+      .map((p) => html`<option value="${p.id}" ${cur === p.id ? 'selected' : ''}>${p.name} (${p.staffNumber})</option>`)}`;
+  };
+  const leaveAdminBox = (on) =>
+    html`<label class="check span2"><input type="checkbox" name="leaveAdmin" ${on ? 'checked' : ''} /> Leave administrator - adds approved leave to the roster and handles cancellations</label>`;
   body.innerHTML = html`
     <div class="toolbar"><h2>User accounts</h2><span class="spacer"></span>
       <button class="btn" data-act="bulk">Create logins for everyone (${unlinked})</button>
       <button class="btn" data-act="import">Import users</button>
       <button class="btn btn-primary" data-act="add">Add user</button></div>
     <p class="muted">People sign in with their email address or staff number. To add many new people at once, use <b>Import users</b> with the template. Planners can edit the plan; admins can also manage accounts. Linking an account to a person shows them "My duties".</p>
-    <div class="table-wrap"><table class="data"><thead><tr><th>Username</th><th>Role</th><th>Person</th><th>Status</th><th></th></tr></thead>
+    <div class="table-wrap"><table class="data"><thead><tr><th>Username</th><th>Role</th><th>Person</th><th>Line manager</th><th>Leave admin</th><th>Status</th><th></th></tr></thead>
     <tbody>${list.map(
       (u) => html`<tr><td>${u.username}</td><td>${u.role}</td><td>${u.personName || html`<span class="muted">–</span>`}</td>
+        <td>${managerName(u.personId)}</td><td>${u.leaveAdmin ? 'Yes' : ''}</td>
         <td>${u.mustChangePassword ? 'Must change password' : 'Active'}</td><td class="actions"><button class="btn btn-sm" data-edit="${u.id}">Edit</button></td></tr>`,
     )}</tbody></table></div>`;
   const reload = () => users(body);
@@ -406,10 +421,11 @@ async function users(body) {
           <label>Username<input name="username" required maxlength="100" /></label>
           <label>Role${roleSel('staff')}</label>
           <label class="span2">Linked person<select name="personId">${personOptions(null)}</select></label>
+          ${leaveAdminBox(false)}
           <label class="span2">Temporary password<input name="password" type="text" minlength="8" required autocomplete="off" /></label>
           <p class="span2 muted">They will be asked to change it at first sign-in.</p></div>`,
-        async (v) => {
-          await post('/users', { ...v, personId: v.personId || null });
+        async (v, form) => {
+          await post('/users', { ...v, personId: v.personId || null, leaveAdmin: form.leaveAdmin.checked });
           reload();
         },
       );
@@ -432,9 +448,14 @@ async function users(body) {
         html`<div class="form-grid">
           <label>Role${roleSel(u.role)}</label>
           <label>Linked person<select name="personId">${personOptions(u.personId)}</select></label>
+          <label class="span2">Line manager <small class="muted">(approves this person's leave)</small><select name="lineManagerId" ${u.personId ? '' : 'disabled'}>${managerOptions(u.personId)}</select></label>
+          ${leaveAdminBox(u.leaveAdmin)}
           <label class="span2">Reset password <small class="muted">(leave blank to keep)</small><input name="password" type="text" minlength="8" autocomplete="off" /></label></div>`,
-        async (v) => {
-          await put(`/users/${u.id}`, { ...v, personId: v.personId || null, password: v.password || undefined });
+        async (v, form) => {
+          const personId = v.personId ? Number(v.personId) : null;
+          await put(`/users/${u.id}`, { ...v, personId, leaveAdmin: form.leaveAdmin.checked, password: v.password || undefined });
+          if (personId && !form.lineManagerId.disabled && (Number(v.lineManagerId) || null) !== (pById.get(personId)?.lineManagerId ?? null))
+            await put(`/people/${personId}/line-manager`, { lineManagerId: v.lineManagerId || null });
           reload();
         },
         { extraActions: '<button value="delete" class="btn btn-danger" formnovalidate>Delete</button>' },
@@ -594,6 +615,7 @@ async function audit(body) {
     if (!d) return '';
     if (e.action === 'assignments.update') return `${d.count} cell(s) ${d.from}${d.to !== d.from ? ` to ${d.to}` : ''}`;
     if (e.action === 'assignments.pattern') return `${d.personIds.length} people, ${d.from} to ${d.to}: ${d.pattern.map((x) => x || '-').join(' ')}`;
+    if (e.action.startsWith('leave.')) return `Request #${d.id}: ${d.start} to ${d.end}`;
     if (e.action === 'user.import') return `${d.created} added, ${d.updated} updated, ${d.accountsCreated} accounts`;
     if (e.action === 'import') return `${d.mode}: ${d.peopleCreated} added, ${d.peopleUpdated} updated, ${d.assignments} duties`;
     return JSON.stringify(d).slice(0, 160);

@@ -75,11 +75,37 @@ export function seedDemo(today) {
     }
   });
   const pidOf = (sn) => db.people.find((p) => p.staffNumber === sn).id;
+  // Line managers: the first person in each team manages the rest; team leads have none (admins approve).
+  for (const t of db.teams) {
+    const members = db.people.filter((p) => p.teamId === t.id).sort((a, b) => a.sortOrder - b.sortOrder);
+    for (const m of members.slice(1)) m.lineManagerId = members[0].id;
+  }
+  for (const p of db.people) p.leaveAllowance = 25;
   db.users = [
     { id: nextId(), username: 'admin', password: 'admin1234', role: 'admin', personId: null, mustChangePassword: false },
-    { id: nextId(), username: 'planner', password: 'planner1234', role: 'planner', personId: pidOf('1002'), mustChangePassword: false },
+    { id: nextId(), username: 'planner', password: 'planner1234', role: 'planner', personId: pidOf('1002'), mustChangePassword: false, leaveAdmin: true },
     { id: nextId(), username: '1001', password: 'staff1234', role: 'staff', personId: pidOf('1001'), mustChangePassword: false },
   ];
+  // Sample leave requests at each stage.
+  db.leave = [];
+  db.leaveEvents = [];
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const leave = (sn, offset, len, status, note) => {
+    const pid = pidOf(sn);
+    const start = addDays(today, offset);
+    const end = addDays(start, len - 1);
+    const days = eachDate(start, end).filter((d) => db.asg[`${pid}|${d}`] && db.asg[`${pid}|${d}`].c !== 'RD').length;
+    const rid = nextId();
+    db.leave.push({ id: rid, personId: pid, type: 'AL', start, end, days, note, status, createdAt: now, decidedAt: status === 'pending' ? null : now, decidedBy: status === 'pending' ? null : 'Team leader', decisionNote: status === 'rejected' ? 'Team is already short that week' : null });
+    db.leaveEvents.push({ id: nextId(), requestId: rid, at: now, username: db.people.find((p) => p.id === pid).name, action: 'requested', note });
+    if (status !== 'pending') db.leaveEvents.push({ id: nextId(), requestId: rid, at: now, username: 'Team leader', action: status === 'rejected' ? 'reject' : 'approve', note: null });
+  };
+  leave('1003', 21, 7, 'pending', 'Family holiday');
+  leave('1005', 35, 4, 'pending', null);
+  leave('1001', 49, 5, 'pending', 'Long weekend away');
+  leave('1010', 14, 7, 'approved', 'Booked flights');
+  leave('1019', 28, 3, 'approved', null);
+  leave('1006', 10, 2, 'rejected', 'Wedding');
   db.seq = id;
   return db;
 }

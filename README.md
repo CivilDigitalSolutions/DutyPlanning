@@ -12,6 +12,7 @@ A Progressive Web App (PWA) that replaces the duty-planning spreadsheet. It work
 | Plan grid | Teams grouped with establishment, filled posts and vacancies. Sticky names and dates. Weekend and today highlighting. Per-team and total on-duty counts, shown in red when a team drops below its minimum. Filter by team, name or staff number, or accreditation. You can show or hide staff numbers, accreditation columns and vacant rows. The grid shows 1 to 13 weeks at a time. |
 | Editing (planners) | Click or drag to select cells, then tap a duty code in the palette. You can also type a code (`RD`, `T1`, `AL` …), and arrow keys move around the grid. Copy and paste works with Excel (tab-separated), and Ctrl+Z undoes changes. Planners can add notes to cells and apply repeating rota patterns to a team or the selected rows, optionally staggered per person. |
 | My duties | Phone-first list of your coming weeks: today, next duty, next rest day, and leave and training counts. Tap a day to see who else is on and what your team is doing, with tap-to-call. Download your duties as a calendar file (`.ics`). |
+| Annual leave | Staff request leave from the app and see their allowance, what's booked and what's waiting. Their **line manager** approves or rejects it. A **leave administrator** then adds approved leave to the roster, and cancellations are handled the same way. See below. |
 | Day view | Who is doing what on a given date, grouped by team or by duty, with an accreditation filter (for example, "who is first-aid qualified and on duty today"). |
 | Accreditations | Any number of accreditation columns, each with an optional expiry date. Expired accreditations show in red and ones expiring within 60 days in amber. |
 | Privacy | Codes can be marked **private** (for example, sickness). Colleagues see "unavailable" instead; only planners and the person can see the real code. Notes are visible only to planners and the person. You can limit mobile numbers to planners, the person's own team, or everyone. |
@@ -36,6 +37,21 @@ Staff No | Name | Initials | Mobile | [Team] | <accreditation columns…> | 01/1
 - **Duty codes** not seen before (for example, `Training Course 3`) are created automatically. Set their colour and type afterwards under **Manage → Duty codes**.
 - **Merge** mode updates people by staff number and replaces their duties for the dates in the file. **Replace** mode clears all teams, people and duties first.
 
+## Annual leave
+
+| Step | Who | What happens |
+| --- | --- | --- |
+| 1. Request | The person (Leave → My leave → Request leave) | Picks dates and a leave type. The form shows how many **working days** come off their allowance (days they're rostered to work, or weekdays where nothing is planned yet), any clash with their other requests, and whether their team would drop below its minimum. |
+| 2. Approve | Their **line manager** (Leave → To approve) | Approves, or rejects with a reason. They see the same day-by-day cover check. If someone has no line manager, an admin or leave administrator approves instead. Nobody can approve their own leave. |
+| 3. Add to roster | A **leave administrator** (Leave → To add to roster) | Chooses the leave code (default AL) and whether to cover rest days, then adds it. Working days get the leave code; rest days and existing leave (e.g. sickness) are left alone. The duties it replaced are remembered. |
+| Cancel | The person | They can cancel while it's pending or approved. Once it's on the roster they **ask to cancel**, and a leave administrator removes it (their original duties are restored) or keeps it. |
+
+**Set-up:**
+- **Line manager** and **annual leave allowance** are fields on each person. Set them under Manage → People, under Manage → User accounts → Edit, or with the *Line manager email* and *Leave allowance* columns in the bulk import template.
+- **Leave administrator** is a tick box on each user account (Manage → User accounts → Edit). Use it for whoever applies leave to the roster. Admins can always do it.
+- The leave year runs from 1 January by default. Change it with `LEAVE_YEAR_START=04-01` (MM-DD). A request counts towards the leave year it starts in.
+- The **Leave** tab shows a badge with the number of requests waiting for you. Every step is recorded on the request's history and in the activity log.
+
 ## Bulk importing new users
 
 Under **Manage → User accounts → Import users** (admins only):
@@ -54,6 +70,8 @@ Under **Manage → User accounts → Import users** (admins only):
    | Position in team | Order on the plan. Blank puts them at the end of the team. |
    | Job title | Rank, grade or job title. |
    | Start date | dd/mm/yyyy (or choose month/day order when uploading). |
+   | Line manager email | The person who approves their leave. They can be elsewhere in the same file. |
+   | Leave allowance | Days per leave year. |
    | App role | `staff` (default), `planner` or `admin`. |
    | One column per accreditation | `Y` if held, or the expiry date. |
 
@@ -171,6 +189,7 @@ docker compose exec app node --disable-warning=ExperimentalWarning scripts/creat
 | `ORG_NAME` | `Duty Planning` | Name shown in the header |
 | `MOBILE_VISIBILITY` | `team` | `all`, `team` or `planners` |
 | `DATE_ORDER` | `dmy` | Default date order when importing |
+| `LEAVE_YEAR_START` | `01-01` | First day of the leave year (MM-DD) |
 | `COOKIE_SECURE` | `true` in production | Send the session cookie over HTTPS only |
 | `TRUST_PROXY` | `loopback, uniquelocal` in production | Express trust-proxy setting, used for client IPs |
 

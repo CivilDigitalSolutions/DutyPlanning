@@ -6,9 +6,10 @@ import { parseCsv, parseGrid, cellValue, guessCategory, colorFor } from '../serv
 import { daysBetween, eachDate, isValidIso } from '../server/dates.js';
 import { seedDemo } from './seed.js';
 import { parseUserRows, generatePassword, templateCsv, ROLES } from '../server/user-import.js';
+import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, datesToApply, leaveActions, leaveBreakdown, leaveYear, validateRequestDates } from '../server/leave-rules.js';
 import { dialog, html, todayIso } from '../public/js/util.js';
 
-const KEY = 'dp-demo-v1';
+const KEY = 'dp-demo-v2';
 const RANK = { staff: 1, planner: 2, admin: 3 };
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -121,7 +122,8 @@ on('GET', '/auth/me', () => {
       username: u.username,
       role: u.role,
       mustChangePassword: u.mustChangePassword,
-      person: p ? { id: p.id, staffNumber: p.staffNumber, name: p.name, initials: p.initials, teamId: p.teamId } : null,
+      leaveAdmin: !!u.leaveAdmin,
+      person: p ? { id: p.id, staffNumber: p.staffNumber, name: p.name, initials: p.initials, teamId: p.teamId, lineManagerId: p.lineManagerId ?? null } : null,
     },
   };
 });
@@ -298,7 +300,20 @@ on('GET', '/people', () => {
   });
   return { people: people.map((p) => ({ ...p, username: db.users.find((u) => u.personId === p.id)?.username ?? null })) };
 });
-const personBody = (b) => {
+const checkManager = (v, selfId) => {
+  const mid = optInt(v);
+  if (Number.isNaN(mid)) bad('Invalid line manager');
+  if (mid != null && !db.people.some((p) => p.id === mid)) bad('Line manager not found');
+  if (mid != null && mid === selfId) bad('Someone cannot be their own line manager');
+  return mid;
+};
+const allowance = (v) => {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  if (!(n >= 0 && n <= 400)) bad('Leave allowance must be between 0 and 400 days');
+  return n;
+};
+const personBody = (b, selfId = null) => {
   const staffNumber = s(b.staffNumber, 50);
   const name = s(b.name, 150);
   if (!staffNumber) bad('Staff number is required');
@@ -322,6 +337,8 @@ const personBody = (b) => {
     email,
     jobTitle: s(b.jobTitle, 100) || null,
     startDate,
+    lineManagerId: checkManager(b.lineManagerId, selfId),
+    leaveAllowance: allowance(b.leaveAllowance),
   };
 };
 on('POST', '/people', ({ body }) => {
@@ -338,7 +355,7 @@ on('POST', '/people', ({ body }) => {
 on('PUT', '/people/:id', ({ body, params }) => {
   const u = need('planner');
   const p = db.people.find((x) => x.id === Number(params.id)) || fail(404, 'Person not found');
-  const v = personBody(body || {});
+  const v = personBody(body || {}, p.id);
   unique(db.people, 'staffNumber', v.staffNumber, p.id, 'That staff number already exists');
   if (v.email) unique(db.people, 'email', v.email, p.id, 'That email is already used by someone else');
   Object.assign(p, v);
@@ -462,6 +479,7 @@ on('GET', '/users', () => {
     role: u.role,
     personId: u.personId,
     mustChangePassword: !!u.mustChangePassword,
+    leaveAdmin: !!u.leaveAdmin,
     personName: db.people.find((p) => p.id === u.personId)?.name ?? null,
   }));
   return { users };
@@ -482,7 +500,7 @@ on('POST', '/users', ({ body }) => {
   checkPw(body.password);
   unique(db.users, 'username', username, null, 'That username already exists');
   const id = nextId();
-  db.users.push({ id, username, password: body.password, ...f, mustChangePassword: true });
+  db.users.push({ id, username, password: body.password, ...f, leaveAdmin: !!body.leaveAdmin, mustChangePassword: true });
   audit(u, 'user.create', { id, username, role: f.role });
   return { id };
 });
@@ -491,7 +509,7 @@ on('PUT', '/users/:id', ({ body, params }) => {
   const u = db.users.find((x) => x.id === Number(params.id)) || fail(404, 'User not found');
   const f = userFields(body || {});
   if (u.id === me_.id && f.role !== 'admin') bad('You cannot remove your own admin role');
-  Object.assign(u, f);
+  Object.assign(u, f, { leaveAdmin: !!body.leaveAdmin });
   if (body.password) {
     checkPw(body.password);
     u.password = body.password;
@@ -710,6 +728,7 @@ on('POST', '/users/import', async ({ body, query, headers }) => {
       if (r.jobTitle) person.jobTitle = r.jobTitle;
       if (r.startDate) person.startDate = r.startDate;
       if (r.staffNumber) person.staffNumber = r.staffNumber;
+      if (r.leaveAllowance != null) person.leaveAllowance = r.leaveAllowance;
       summary.updated++;
     } else {
       let staffNumber = r.staffNumber;
@@ -717,7 +736,7 @@ on('POST', '/users/import', async ({ body, query, headers }) => {
         const sn = 'U' + String(n).padStart(5, '0');
         if (!byStaff(sn)) staffNumber = sn;
       }
-      db.people.push((person = { id: nextId(), staffNumber, ...fields, mobile: r.mobile || null, jobTitle: r.jobTitle || null, startDate: r.startDate }));
+      db.people.push((person = { id: nextId(), staffNumber, ...fields, mobile: r.mobile || null, jobTitle: r.jobTitle || null, startDate: r.startDate, leaveAllowance: r.leaveAllowance }));
       summary.created++;
     }
     const rec = (db.pacc[person.id] ??= {});
@@ -736,6 +755,13 @@ on('POST', '/users/import', async ({ body, query, headers }) => {
       if (!password) summary.credentials.push({ email: r.email, name: r.name, password: pw });
     }
   }
+  summary.managersNotFound = [];
+  for (const r of parsed.rows) {
+    if (r.action === 'error' || r.action === 'skip' || !r.lineManagerEmail) continue;
+    const m = byEmail(r.lineManagerEmail);
+    if (m) byEmail(r.email).lineManagerId = m.id;
+    else if (!summary.managersNotFound.includes(r.lineManagerEmail)) summary.managersNotFound.push(r.lineManagerEmail);
+  }
   for (const id of touched) {
     const t = db.teams.find((x) => x.id === id);
     t.establishment = Math.max(t.establishment, db.people.filter((p) => p.teamId === id && p.active).length);
@@ -743,6 +769,184 @@ on('POST', '/users/import', async ({ body, query, headers }) => {
   audit(u, 'user.import', { created: summary.created, updated: summary.updated, skipped: summary.skipped, accountsCreated: summary.accountsCreated, teamsCreated: summary.teamsCreated });
   changed({ type: 'meta' });
   return { preview, summary };
+});
+
+on('PUT', '/people/:id/line-manager', ({ body, params }) => {
+  const u = need('planner');
+  const p = db.people.find((x) => x.id === Number(params.id)) || fail(404, 'Person not found');
+  p.lineManagerId = checkManager(body?.lineManagerId, p.id);
+  audit(u, 'person.lineManager', { id: p.id, lineManagerId: p.lineManagerId });
+  changed({ type: 'leave' });
+  return { ok: true };
+});
+
+// ---------------- Annual leave (same behaviour as server/leave.js) ----------------
+db.leave ??= [];
+db.leaveEvents ??= [];
+const administers = (u) => u.role === 'admin' || !!u.leaveAdmin;
+const viewerOf = (u) => ({ personId: u.personId, role: u.role, leaveAdmin: !!u.leaveAdmin });
+const leaveTypes = () => listCodes().filter((c) => c.category === 'leave' && !c.private).map((c) => ({ code: c.code, label: c.label }));
+function leaveView(r) {
+  const p = db.people.find((x) => x.id === r.personId) || {};
+  const m = db.people.find((x) => x.id === p.lineManagerId);
+  return {
+    ...r,
+    personName: p.name,
+    staffNumber: p.staffNumber,
+    teamId: p.teamId,
+    teamName: db.teams.find((t) => t.id === p.teamId)?.name ?? null,
+    managerPersonId: p.lineManagerId ?? null,
+    managerName: m?.name ?? null,
+    typeLabel: findCode(r.type)?.label ?? r.type,
+  };
+}
+const withActs = (u) => (r) => {
+  const v = leaveView(r);
+  return { ...v, actions: leaveActions(v, viewerOf(u)) };
+};
+function breakdown(personId, start, end) {
+  const p = db.people.find((x) => x.id === personId);
+  const team = db.teams.find((t) => t.id === p?.teamId);
+  const mates = p?.teamId ? db.people.filter((x) => x.teamId === p.teamId && x.active) : [];
+  return leaveBreakdown({
+    dates: eachDate(start, end),
+    codeAt: (d) => db.asg[`${personId}|${d}`]?.c,
+    info: (c) => findCode(c),
+    teamOnDuty: p?.teamId ? (d) => mates.filter((x) => findCode(db.asg[`${x.id}|${d}`]?.c || '')?.category === 'duty').length : null,
+    minStrength: team?.minStrength ?? null,
+  });
+}
+const overlaps = (pid, start, end, except = 0) => db.leave.filter((r) => r.personId === pid && r.id !== except && ACTIVE_STATUSES.includes(r.status) && r.start <= end && r.end >= start);
+const leaveEvent = (id, u, action, note) => db.leaveEvents.push({ id: nextId(), requestId: id, at: new Date().toISOString().replace('T', ' ').slice(0, 19), username: db.people.find((p) => p.id === u.personId)?.name || u.username, action, note: note || null });
+function targetPerson(u, personId) {
+  const id = personId ? Number(personId) : u.personId;
+  if (!id) bad('Your account is not linked to anyone on the plan - ask an administrator to link it');
+  if (id !== u.personId && !(u.role === 'planner' || administers(u))) fail(403, 'You can only request leave for yourself');
+  if (!db.people.some((p) => p.id === id)) bad('Person not found');
+  return id;
+}
+
+on('GET', '/leave/summary', ({ query }) => {
+  const u = need('staff');
+  const year = leaveYear(isValidIso(query.date) ? query.date : todayIso());
+  let mine = null;
+  if (u.personId) {
+    const rows = db.leave.filter((r) => r.personId === u.personId && r.start >= year.from && r.start <= year.to && ACTIVE_STATUSES.includes(r.status));
+    const sum = (f) => rows.filter(f).reduce((n, r) => n + r.days, 0);
+    mine = {
+      allowance: db.people.find((p) => p.id === u.personId)?.leaveAllowance ?? null,
+      booked: sum((r) => r.status !== 'pending'),
+      pending: sum((r) => r.status === 'pending'),
+    };
+  }
+  const toApprove = db.leave.filter((r) => {
+    if (r.status !== 'pending' || r.personId === u.personId) return false;
+    const mgr = db.people.find((p) => p.id === r.personId)?.lineManagerId ?? null;
+    return mgr === u.personId && u.personId != null ? true : mgr == null && administers(u);
+  }).length;
+  const toApply = administers(u) ? db.leave.filter((r) => r.status === 'approved' || r.status === 'cancel_requested').length : 0;
+  const isManager = !!u.personId && db.people.some((p) => p.lineManagerId === u.personId);
+  return { year, mine, toApprove, toApply, isManager, administers: administers(u), leaveTypes: leaveTypes() };
+});
+
+on('GET', '/leave', ({ query }) => {
+  const u = need('staff');
+  const scope = query.scope || 'mine';
+  const mgrOf = (r) => db.people.find((p) => p.id === r.personId)?.lineManagerId ?? null;
+  let list;
+  if (scope === 'mine') list = db.leave.filter((r) => r.personId === u.personId);
+  else if (scope === 'approve') list = db.leave.filter((r) => r.personId !== u.personId && ((u.personId != null && mgrOf(r) === u.personId) || (administers(u) && mgrOf(r) == null)));
+  else if (scope === 'apply') {
+    if (!administers(u)) fail(403, 'Only leave administrators can do this');
+    list = db.leave.filter((r) => ['approved', 'cancel_requested', 'applied'].includes(r.status));
+  } else if (scope === 'all') {
+    if (!(u.role === 'planner' || administers(u))) fail(403, 'Not permitted');
+    list = db.leave;
+  } else bad('Unknown scope');
+  if (STATUSES.includes(query.status)) list = list.filter((r) => r.status === query.status);
+  const rank = { pending: 0, cancel_requested: 1, approved: 2 };
+  list = [...list].sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3) || (a.start < b.start ? 1 : a.start > b.start ? -1 : 0));
+  return { requests: list.slice(0, 500).map(withActs(u)) };
+});
+
+on('GET', '/leave/preview', ({ query }) => {
+  const u = need('staff');
+  const pid = targetPerson(u, query.personId);
+  const err = validateRequestDates(query.start, query.end, isValidIso, daysBetween);
+  if (err) bad(err);
+  return { ...breakdown(pid, query.start, query.end), overlaps: overlaps(pid, query.start, query.end).map((r) => ({ id: r.id, start: r.start, end: r.end, status: r.status })) };
+});
+
+on('POST', '/leave', ({ body }) => {
+  const u = need('staff');
+  const b = body || {};
+  const pid = targetPerson(u, b.personId);
+  const err = validateRequestDates(b.start, b.end, isValidIso, daysBetween);
+  if (err) bad(err);
+  const type = leaveTypes().find((t) => lc(t.code) === lc(b.type || 'AL'));
+  if (!type) bad('Choose a leave type');
+  const clash = overlaps(pid, b.start, b.end);
+  if (clash.length) fail(409, `This overlaps another request (${clash[0].start} to ${clash[0].end})`);
+  const r = {
+    id: nextId(),
+    personId: pid,
+    type: type.code,
+    start: b.start,
+    end: b.end,
+    days: breakdown(pid, b.start, b.end).workingDays,
+    note: s(b.note, 500) || null,
+    status: 'pending',
+    createdAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
+  };
+  db.leave.push(r);
+  leaveEvent(r.id, u, 'requested', r.note);
+  audit(u, 'leave.request', { id: r.id, personId: pid, start: r.start, end: r.end });
+  changed({ type: 'leave' });
+  return { request: withActs(u)(r) };
+});
+
+on('GET', '/leave/:id', ({ params }) => {
+  const u = need('staff');
+  const r = db.leave.find((x) => x.id === Number(params.id));
+  const v = r && leaveView(r);
+  if (!v || !(v.personId === u.personId || v.managerPersonId === u.personId || u.role === 'planner' || administers(u))) fail(404, 'Request not found');
+  return { request: withActs(u)(r), ...breakdown(r.personId, r.start, r.end), events: db.leaveEvents.filter((e) => e.requestId === r.id) };
+});
+
+on('POST', '/leave/:id/:action', ({ params, body }) => {
+  const u = need('staff');
+  const action = params.action;
+  if (!(action in ACTION_RESULT)) fail(404, 'Unknown action');
+  const r = db.leave.find((x) => x.id === Number(params.id)) || fail(404, 'Request not found');
+  if (!leaveActions(leaveView(r), viewerOf(u))[action]) fail(403, 'You cannot do that to this request now');
+  const note = s(body?.note, 500) || null;
+  if ((action === 'reject' || action === 'decline') && !note) bad('Give a reason so the person knows why');
+  const who = db.people.find((p) => p.id === u.personId)?.name || u.username;
+  let rosterChanged = false;
+  if (action === 'approve' || action === 'reject' || action === 'decline') Object.assign(r, { status: ACTION_RESULT[action], decidedBy: who, decidedAt: new Date().toISOString(), decisionNote: note });
+  else if (action === 'apply') {
+    const code = findCode(String(body?.code || r.type));
+    if (!code || code.category !== 'leave') bad('Choose a leave code to put on the roster');
+    const dates = datesToApply(breakdown(r.personId, r.start, r.end).days, { includeRestDays: !!body?.includeRestDays });
+    r.snapshot = dates.map((d) => [d, db.asg[`${r.personId}|${d}`]?.c ?? null, db.asg[`${r.personId}|${d}`]?.n ?? null]);
+    for (const d of dates) db.asg[`${r.personId}|${d}`] = { c: code.code, n: `Leave request #${r.id}` };
+    Object.assign(r, { status: 'applied', appliedBy: who, appliedAt: new Date().toISOString(), appliedCode: code.code });
+    rosterChanged = dates.length > 0;
+  } else if (action === 'remove') {
+    for (const [d, code, prevNote] of r.snapshot || []) {
+      const k = `${r.personId}|${d}`;
+      if (db.asg[k]?.c !== r.appliedCode) continue;
+      if (code) db.asg[k] = prevNote ? { c: code, n: prevNote } : { c: code };
+      else delete db.asg[k];
+      rosterChanged = true;
+    }
+    r.status = 'cancelled';
+  } else r.status = ACTION_RESULT[action];
+  leaveEvent(r.id, u, action, note);
+  audit(u, `leave.${action}`, { id: r.id, personId: r.personId, start: r.start, end: r.end });
+  if (rosterChanged) changed({ type: 'roster', from: r.start, to: r.end });
+  changed({ type: 'leave' });
+  return { request: withActs(u)(r) };
 });
 
 // ---------------- Public interface (same as public/js/api.js) ----------------

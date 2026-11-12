@@ -1411,3 +1411,160 @@ code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
+
+/* Leave */
+.leave {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 12px;
+}
+.leave .toolbar {
+  padding: 8px 0;
+}
+.nav-count,
+.subtabs .count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--today);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+.bottom-nav a {
+  position: relative;
+}
+.bottom-nav .nav-count {
+  position: absolute;
+  top: 4px;
+  left: calc(50% + 6px);
+  margin: 0;
+}
+.req-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.req {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+.req-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 320px;
+}
+.req-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.req-dates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.req-note {
+  font-size: 13px;
+}
+.req-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.status {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.status-pending {
+  color: var(--warn);
+}
+.status-approved {
+  color: var(--primary);
+}
+.status-applied {
+  color: var(--success);
+}
+.status-rejected {
+  color: var(--danger);
+}
+.status-cancelled {
+  color: var(--muted);
+}
+.stat-bad b {
+  color: var(--danger);
+}
+.empty-inline {
+  color: var(--muted);
+  padding: 16px;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+.timeline {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.day-table {
+  max-height: 260px;
+  overflow: auto;
+  margin: 8px 0;
+}
+.day-table td,
+.day-table th {
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.day-table tr.muted td {
+  color: var(--muted);
+}
+.req-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.req-detail p,
+.req-detail h3 {
+  margin: 0;
+}
+.leave-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.leave-preview p {
+  margin: 0;
+}
+.mini-day.off {
+  opacity: 0.55;
+}
+.warn-text {
+  color: var(--warn);
+}
+.mine-head .row-btns {
+  justify-content: flex-end;
+}

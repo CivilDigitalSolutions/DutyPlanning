@@ -23,6 +23,7 @@ import { addDays, daysBetween, eachDate, isValidIso } from './dates.js';
 import { applyImport, exportWorkbook, parseGrid, readGrid } from './spreadsheet.js';
 import { parseUserRows, templateCsv, ROLES } from './user-import.js';
 import { applyUserImport, userTemplateWorkbook } from './users-io.js';
+import { registerLeaveRoutes } from './leave.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const MAX_RANGE_DAYS = 400;
@@ -46,6 +47,7 @@ export function createApp(db, config = {}) {
     mobileVisibility: 'team', // 'all' | 'team' | 'planners'
     cookieSecure: false,
     dateOrder: 'dmy',
+    leaveYearStart: '01-01',
     ...config,
   };
   const app = express();
@@ -147,9 +149,20 @@ export function createApp(db, config = {}) {
   app.get('/api/auth/me', (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'Not signed in' });
     const person = req.user.personId
-      ? db.prepare('SELECT id, staff_number AS staffNumber, name, initials, team_id AS teamId FROM people WHERE id = ?').get(req.user.personId)
+      ? db
+          .prepare('SELECT id, staff_number AS staffNumber, name, initials, team_id AS teamId, line_manager_id AS lineManagerId FROM people WHERE id = ?')
+          .get(req.user.personId)
       : null;
-    res.json({ user: { id: req.user.id, username: req.user.username, role: req.user.role, mustChangePassword: req.user.mustChangePassword, person } });
+    res.json({
+      user: {
+        id: req.user.id,
+        username: req.user.username,
+        role: req.user.role,
+        leaveAdmin: req.user.leaveAdmin,
+        mustChangePassword: req.user.mustChangePassword,
+        person,
+      },
+    });
   });
 
   app.post(
@@ -435,6 +448,7 @@ export function createApp(db, config = {}) {
     const people = db
       .prepare(
         `SELECT p.id, p.staff_number AS staffNumber, p.name, p.initials, p.mobile, p.email, p.job_title AS jobTitle, p.start_date AS startDate,
+                p.line_manager_id AS lineManagerId, p.leave_allowance AS leaveAllowance,
                 p.team_id AS teamId, p.sort_order AS sortOrder, p.active,
                 (SELECT u.username FROM users u WHERE u.person_id = p.id LIMIT 1) AS username
          FROM people p LEFT JOIN teams t ON t.id = p.team_id
@@ -444,7 +458,7 @@ export function createApp(db, config = {}) {
       .map((p) => ({ ...p, active: !!p.active }));
     res.json({ people });
   });
-  const personBody = (b) => {
+  const personBody = (b, selfId = null) => {
     const staffNumber = s(b.staffNumber, 50);
     const name = s(b.name, 150);
     if (!staffNumber) throw bad('Staff number is required');
@@ -457,6 +471,12 @@ export function createApp(db, config = {}) {
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw bad('Enter a valid email address');
     const startDate = s(b.startDate, 10) || null;
     if (startDate && !isValidIso(startDate)) throw bad('Start date must be a date');
+    const lineManagerId = optInt(b.lineManagerId);
+    if (Number.isNaN(lineManagerId)) throw bad('Invalid line manager');
+    if (lineManagerId != null && !db.prepare('SELECT 1 FROM people WHERE id = ?').get(lineManagerId)) throw bad('Line manager not found');
+    if (lineManagerId != null && selfId != null && lineManagerId === selfId) throw bad('Someone cannot be their own line manager');
+    const leaveAllowance = b.leaveAllowance == null || b.leaveAllowance === '' ? null : Number(b.leaveAllowance);
+    if (leaveAllowance != null && !(leaveAllowance >= 0 && leaveAllowance <= 400)) throw bad('Leave allowance must be between 0 and 400 days');
     return [
       staffNumber,
       name,
@@ -468,6 +488,8 @@ export function createApp(db, config = {}) {
       email,
       s(b.jobTitle, 100) || null,
       startDate,
+      lineManagerId,
+      leaveAllowance,
     ];
   };
   const uniqueGuard = (fn, msg) => {
@@ -487,7 +509,9 @@ export function createApp(db, config = {}) {
         () =>
           Number(
             db
-              .prepare('INSERT INTO people (staff_number,name,initials,mobile,team_id,sort_order,active,email,job_title,start_date) VALUES (?,?,?,?,?,?,?,?,?,?)')
+              .prepare(
+                'INSERT INTO people (staff_number,name,initials,mobile,team_id,sort_order,active,email,job_title,start_date,line_manager_id,leave_allowance) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+              )
               .run(...personBody(req.body || {})).lastInsertRowid,
           ),
         'That staff number or email is already used by someone else',
@@ -505,8 +529,10 @@ export function createApp(db, config = {}) {
       const r = uniqueGuard(
         () =>
           db
-            .prepare('UPDATE people SET staff_number=?, name=?, initials=?, mobile=?, team_id=?, sort_order=?, active=?, email=?, job_title=?, start_date=? WHERE id=?')
-            .run(...personBody(req.body || {}), Number(req.params.id)),
+            .prepare(
+              'UPDATE people SET staff_number=?, name=?, initials=?, mobile=?, team_id=?, sort_order=?, active=?, email=?, job_title=?, start_date=?, line_manager_id=?, leave_allowance=? WHERE id=?',
+            )
+            .run(...personBody(req.body || {}, Number(req.params.id)), Number(req.params.id)),
         'That staff number or email is already used by someone else',
       );
       if (!r.changes) throw new HttpError(404, 'Person not found');
@@ -523,6 +549,23 @@ export function createApp(db, config = {}) {
       if (!r.changes) throw new HttpError(404, 'Person not found');
       audit(db, req.user, 'person.delete', { id: req.params.id });
       broadcast({ type: 'meta' });
+      res.json({ ok: true });
+    }),
+  );
+  app.put(
+    '/api/people/:id/line-manager',
+    planner,
+    json,
+    wrap((req, res) => {
+      const pid = Number(req.params.id);
+      if (!db.prepare('SELECT 1 FROM people WHERE id = ?').get(pid)) throw new HttpError(404, 'Person not found');
+      const mid = optInt(req.body?.lineManagerId);
+      if (Number.isNaN(mid)) throw bad('Invalid line manager');
+      if (mid != null && !db.prepare('SELECT 1 FROM people WHERE id = ?').get(mid)) throw bad('Line manager not found');
+      if (mid === pid) throw bad('Someone cannot be their own line manager');
+      db.prepare('UPDATE people SET line_manager_id = ? WHERE id = ?').run(mid, pid);
+      audit(db, req.user, 'person.lineManager', { id: pid, lineManagerId: mid });
+      broadcast({ type: 'leave' });
       res.json({ ok: true });
     }),
   );
@@ -659,11 +702,12 @@ export function createApp(db, config = {}) {
   app.get('/api/users', admin, (req, res) => {
     const users = db
       .prepare(
-        `SELECT u.id, u.username, u.role, u.person_id AS personId, u.must_change_password AS mustChangePassword, u.created_at AS createdAt, p.name AS personName
+        `SELECT u.id, u.username, u.role, u.person_id AS personId, u.must_change_password AS mustChangePassword, u.leave_admin AS leaveAdmin,
+                u.created_at AS createdAt, p.name AS personName
          FROM users u LEFT JOIN people p ON p.id = u.person_id ORDER BY u.role, u.username`,
       )
       .all()
-      .map((u) => ({ ...u, mustChangePassword: !!u.mustChangePassword }));
+      .map((u) => ({ ...u, mustChangePassword: !!u.mustChangePassword, leaveAdmin: !!u.leaveAdmin }));
     res.json({ users });
   });
   const userFields = (b) => {
@@ -688,8 +732,8 @@ export function createApp(db, config = {}) {
         () =>
           Number(
             db
-              .prepare('INSERT INTO users (username, password_hash, role, person_id, must_change_password) VALUES (?,?,?,?,1)')
-              .run(username, hashPassword(req.body.password), role, personId).lastInsertRowid,
+              .prepare('INSERT INTO users (username, password_hash, role, person_id, must_change_password, leave_admin) VALUES (?,?,?,?,1,?)')
+              .run(username, hashPassword(req.body.password), role, personId, req.body.leaveAdmin ? 1 : 0).lastInsertRowid,
           ),
         'That username already exists',
       );
@@ -705,7 +749,7 @@ export function createApp(db, config = {}) {
       const id = Number(req.params.id);
       const { role, personId } = userFields(req.body || {});
       if (id === req.user.id && role !== 'admin') throw bad('You cannot remove your own admin role');
-      const r = db.prepare('UPDATE users SET role=?, person_id=? WHERE id=?').run(role, personId, id);
+      const r = db.prepare('UPDATE users SET role=?, person_id=?, leave_admin=? WHERE id=?').run(role, personId, req.body.leaveAdmin ? 1 : 0, id);
       if (!r.changes) throw new HttpError(404, 'User not found');
       if (req.body.password) {
         const err = validatePassword(req.body.password);
@@ -713,7 +757,7 @@ export function createApp(db, config = {}) {
         db.prepare('UPDATE users SET password_hash=?, must_change_password=1 WHERE id=?').run(hashPassword(req.body.password), id);
         destroyUserSessions(db, id);
       }
-      audit(db, req.user, 'user.update', { id, role, personId, passwordReset: !!req.body.password });
+      audit(db, req.user, 'user.update', { id, role, personId, leaveAdmin: !!req.body.leaveAdmin, passwordReset: !!req.body.password });
       res.json({ ok: true });
     }),
   );
@@ -812,6 +856,11 @@ export function createApp(db, config = {}) {
         const existing = byEmail.get(r.email) || sn || userByName.get(r.email);
         r.action = r.errors.length ? 'error' : existing ? (updateExisting ? 'update' : 'skip') : 'create';
       }
+      const inFile = new Set(parsed.rows.filter((r) => !r.errors.length).map((r) => r.email));
+      const unknownManagers = [
+        ...new Set(parsed.rows.filter((r) => r.lineManagerEmail && !inFile.has(r.lineManagerEmail) && !byEmail.get(r.lineManagerEmail)).map((r) => r.lineManagerEmail)),
+      ];
+      if (unknownManagers.length) parsed.warnings.push(`Line manager not found, so left blank: ${unknownManagers.join(', ')}`);
       const preview = {
         columns: parsed.columns,
         warnings: parsed.warnings,
@@ -884,6 +933,8 @@ export function createApp(db, config = {}) {
       res.send(Buffer.from(buf));
     }),
   );
+
+  registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, broadcast, cfg });
 
   app.get('/healthz', (req, res) => {
     db.prepare('SELECT 1').get();
