@@ -111,6 +111,16 @@ CREATE TABLE IF NOT EXISTS leave_events (
 );
 CREATE INDEX IF NOT EXISTS leave_events_req ON leave_events(request_id);
 
+CREATE TABLE IF NOT EXISTS leave_lockdowns (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  end_date TEXT NOT NULL,
+  team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS public_holidays (
   date TEXT PRIMARY KEY,
   name TEXT NOT NULL
@@ -156,6 +166,7 @@ function migrate(db) {
   if (!cols.has('line_manager_id')) db.exec('ALTER TABLE people ADD COLUMN line_manager_id INTEGER REFERENCES people(id) ON DELETE SET NULL');
   const ucols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
   if (!ucols.has('leave_admin')) db.exec('ALTER TABLE users ADD COLUMN leave_admin INTEGER NOT NULL DEFAULT 0');
+  if (!ucols.has('supervisor')) db.exec('ALTER TABLE users ADD COLUMN supervisor INTEGER NOT NULL DEFAULT 0');
 }
 
 /** Run fn inside a transaction. */

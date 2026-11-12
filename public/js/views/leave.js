@@ -48,7 +48,7 @@ export async function render(root, params) {
   const tabs = [
     ...(me.person ? [['mine', 'My leave']] : []),
     ...(sum.isManager || sum.administers || me.role === 'admin' ? [['approve', 'To approve', sum.toApprove]] : []),
-    ...(sum.administers ? [['apply', 'To add to roster', sum.toApply]] : []),
+    ...(sum.administers || sum.canRosterLockdown ? [['apply', 'To add to roster', sum.toApply]] : []),
     ...(me.role === 'planner' || sum.administers ? [['all', 'All requests']] : []),
   ];
   if (!tabs.length) {
@@ -77,8 +77,21 @@ export async function render(root, params) {
 }
 
 // ---------- shared list rendering ----------
+const actionsOf = (r) => Object.entries(r.actions).filter(([k, v]) => v && k in ACTION_LABEL).map(([k]) => k);
+
+function lockdownNote(r) {
+  if (!r.lockdowns?.length) return '';
+  const names = r.lockdowns.map((l) => l.name).join(', ');
+  return html`<div class="lock-note">🔒 In leave lockdown: <b>${names}</b>${
+    r.actions.needsSupervisor
+      ? html` - <span>needs a supervisor or planner to add it to the roster</span>`
+      : r.status === 'pending' || r.status === 'approved'
+        ? html` - only a supervisor or planner can add it to the roster`
+        : ''
+  }</div>`;
+}
 function requestCard(r, { showPerson = true } = {}) {
-  const acts = Object.entries(r.actions).filter(([, v]) => v).map(([k]) => k);
+  const acts = actionsOf(r);
   return html`<li class="req card" data-id="${r.id}">
     <div class="req-main">
       <div class="req-top">
@@ -88,6 +101,7 @@ function requestCard(r, { showPerson = true } = {}) {
       <div class="req-dates"><b>${range(r)}</b> · ${chip(r.type)} ${r.typeLabel || r.type} · ${plural(r.days, 'working day')}</div>
       ${r.note ? html`<div class="muted req-note">"${r.note}"</div>` : ''}
       ${r.decisionNote && (r.status === 'rejected' || r.status === 'approved' || r.status === 'applied') ? html`<div class="req-note"><span class="muted">${r.decidedBy || 'Manager'}:</span> ${r.decisionNote}</div>` : ''}
+      ${lockdownNote(r)}
       ${r.status === 'pending' ? html`<div class="muted small">${r.managerName ? `With ${r.managerName} for approval` : 'No line manager set - an administrator will approve'}</div>` : ''}
     </div>
     <div class="req-actions">
@@ -156,7 +170,7 @@ function breakdownTable(days, { applyCode = null } = {}) {
     <tbody>${days.map((d) => {
       const becomes = applyCode ? planCode(d, applyCode) : null;
       return html`<tr class="${d.coverLow ? 'row-error' : ''} ${d.working ? '' : 'muted'}">
-        <td>${fmtDate(d.date, 'dow')} ${fmtDate(d.date, 'dm')}${d.publicHoliday ? html`<div class="ph-name">${d.publicHoliday}</div>` : ''}</td>
+        <td>${fmtDate(d.date, 'dow')} ${fmtDate(d.date, 'dm')}${d.publicHoliday ? html`<div class="ph-name">${d.publicHoliday}</div>` : ''}${d.lockdown ? html`<div class="lock-name">🔒 ${d.lockdown}</div>` : ''}</td>
         <td>${chip(d.code)} ${d.working ? '' : html`<small>${d.publicHoliday ? 'public holiday - not counted' : 'not counted'}</small>`}</td>
         ${applyCode ? html`<td>${becomes ? html`${chip(becomes)} <small>${codeInfo(becomes).label}</small>` : html`<small class="muted">unchanged</small>`}</td>` : ''}
         <td>${d.teamOnDuty == null ? '–' : d.category === 'duty' ? html`${d.teamAfter}${d.coverLow ? html` <b class="error">below minimum</b>` : ''}` : d.teamOnDuty}</td>
@@ -172,11 +186,12 @@ async function openRequest(id, refresh) {
     return toast(e.message, 'error');
   }
   const r = data.request;
-  const acts = Object.entries(r.actions).filter(([, v]) => v).map(([k]) => k);
+  const acts = actionsOf(r);
   const d = dialog(
     `${r.personName}: ${range(r)}`,
     html`<div class="req-detail">
       <div class="req-top">${pill(r.status)} <span>${chip(r.type)} ${r.typeLabel || r.type}</span> <span>${plural(r.days, 'working day')}</span></div>
+      ${lockdownNote(r)}
       <dl class="kv">
         <dt>Team</dt><dd>${r.teamName || '–'}</dd>
         <dt>Line manager</dt><dd>${r.managerName || 'None set'}</dd>
@@ -264,6 +279,10 @@ function requestDialog(sum, refresh) {
         <div class="mini-days">${p.days.map((x) => html`<div class="mini-day ${x.working ? '' : 'off'} ${x.publicHoliday ? 'ph' : ''}" title="${x.publicHoliday || ''}"><small>${x.publicHoliday ? 'Hol' : fmtDate(x.date, 'dow')}</small><b>${dayNum(x.date)}</b>${chip(x.code)}</div>`)}</div>
         ${p.days.some((x) => x.publicHoliday)
           ? html`<p class="small">Public holidays in this period (not counted): ${p.days.filter((x) => x.publicHoliday).map((x) => `${fmtDate(x.date, 'dm')} ${x.publicHoliday}`).join(', ')}.</p>`
+          : ''}
+        ${p.lockdowns?.length
+          ? html`<div class="lock-box"><b>🔒 Leave lockdown:</b> ${p.lockdowns.map((l) => `${l.name} (${range(l)})`).join('; ')}.
+              Your manager can still approve this, but only a supervisor or planner can add it to the roster.</div>`
           : ''}
         ${p.overlaps.length ? html`<p class="error">This overlaps your request for ${p.overlaps.map(range).join(', ')}.</p>` : ''}
         ${p.coverWarnings ? html`<p class="warn-text">Your team would be below its minimum on ${plural(p.coverWarnings, 'day')} - your manager will see this.</p>` : ''}

@@ -7,10 +7,10 @@ import { daysBetween, eachDate, isValidIso } from '../server/dates.js';
 import { seedDemo } from './seed.js';
 import { REGIONS, ukBankHolidays } from '../server/holidays.js';
 import { parseUserRows, generatePassword, templateCsv, ROLES } from '../server/user-import.js';
-import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, validateRequestDates } from '../server/leave-rules.js';
+import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, validateRequestDates, lockdownsFor, canRosterLockdown } from '../server/leave-rules.js';
 import { dialog, html, todayIso } from '../public/js/util.js';
 
-const KEY = 'dp-demo-v4';
+const KEY = 'dp-demo-v5';
 const RANK = { staff: 1, planner: 2, admin: 3 };
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -124,6 +124,7 @@ on('GET', '/auth/me', () => {
       role: u.role,
       mustChangePassword: u.mustChangePassword,
       leaveAdmin: !!u.leaveAdmin,
+      supervisor: !!u.supervisor,
       person: p ? { id: p.id, staffNumber: p.staffNumber, name: p.name, initials: p.initials, teamId: p.teamId, lineManagerId: p.lineManagerId ?? null } : null,
     },
   };
@@ -177,7 +178,8 @@ on('GET', '/roster', ({ query }) => {
       else assignments.push(a.n && (planner || own) ? [pid, d, a.c, a.n] : [pid, d, a.c]);
     }
   const publicHolidays = Object.fromEntries(Object.entries(db.holidays || {}).filter(([d]) => d >= from && d <= to));
-  return { from, to, teams: listTeams(), people, assignments, publicHolidays };
+  const lockdowns = (db.lockdowns || []).filter((l) => l.start <= to && l.end >= from).map(({ id, name, start, end, teamId }) => ({ id, name, start, end, teamId }));
+  return { from, to, teams: listTeams(), people, assignments, publicHolidays, lockdowns };
 });
 
 on('PUT', '/assignments', ({ body }) => {
@@ -475,6 +477,7 @@ on('GET', '/users', () => {
     personId: u.personId,
     mustChangePassword: !!u.mustChangePassword,
     leaveAdmin: !!u.leaveAdmin,
+    supervisor: !!u.supervisor,
     personName: db.people.find((p) => p.id === u.personId)?.name ?? null,
   }));
   return { users };
@@ -495,7 +498,7 @@ on('POST', '/users', ({ body }) => {
   checkPw(body.password);
   unique(db.users, 'username', username, null, 'That username already exists');
   const id = nextId();
-  db.users.push({ id, username, password: body.password, ...f, leaveAdmin: !!body.leaveAdmin, mustChangePassword: true });
+  db.users.push({ id, username, password: body.password, ...f, leaveAdmin: !!body.leaveAdmin, supervisor: !!body.supervisor, mustChangePassword: true });
   audit(u, 'user.create', { id, username, role: f.role });
   return { id };
 });
@@ -504,7 +507,7 @@ on('PUT', '/users/:id', ({ body, params }) => {
   const u = db.users.find((x) => x.id === Number(params.id)) || fail(404, 'User not found');
   const f = userFields(body || {});
   if (u.id === me_.id && f.role !== 'admin') bad('You cannot remove your own admin role');
-  Object.assign(u, f, { leaveAdmin: !!body.leaveAdmin });
+  Object.assign(u, f, { leaveAdmin: !!body.leaveAdmin, supervisor: !!body.supervisor });
   if (body.password) {
     checkPw(body.password);
     u.password = body.password;
@@ -778,7 +781,10 @@ on('PUT', '/people/:id/line-manager', ({ body, params }) => {
 db.leave ??= [];
 db.leaveEvents ??= [];
 const administers = (u) => u.role === 'admin' || !!u.leaveAdmin;
-const viewerOf = (u) => ({ personId: u.personId, role: u.role, leaveAdmin: !!u.leaveAdmin });
+const viewerOf = (u) => ({ personId: u.personId, role: u.role, leaveAdmin: !!u.leaveAdmin, supervisor: !!u.supervisor });
+db.lockdowns ??= [];
+const lockdownList = () =>
+  [...db.lockdowns].sort((a, b) => (a.start < b.start ? -1 : 1)).map((l) => ({ ...l, teamName: db.teams.find((t) => t.id === l.teamId)?.name ?? null }));
 const leaveTypes = () => listCodes().filter((c) => c.category === 'leave' && !c.private).map((c) => ({ code: c.code, label: c.label }));
 function leaveView(r) {
   const p = db.people.find((x) => x.id === r.personId) || {};
@@ -796,6 +802,7 @@ function leaveView(r) {
 }
 const withActs = (u) => (r) => {
   const v = leaveView(r);
+  v.lockdowns = lockdownsFor(db.lockdowns, v.teamId, v.start, v.end).map(({ id, name, start, end }) => ({ id, name, start, end }));
   return { ...v, actions: leaveActions(v, viewerOf(u)) };
 };
 function breakdown(personId, start, end) {
@@ -804,6 +811,7 @@ function breakdown(personId, start, end) {
   const mates = p?.teamId ? db.people.filter((x) => x.teamId === p.teamId && x.active) : [];
   return leaveBreakdown({
     holidayAt: (d) => db.holidays?.[d],
+    lockdownAt: (d) => lockdownsFor(db.lockdowns, p?.teamId ?? null, d, d)[0]?.name,
     dates: eachDate(start, end),
     codeAt: (d) => db.asg[`${personId}|${d}`]?.c,
     info: (c) => findCode(c),
@@ -828,9 +836,12 @@ on('GET', '/leave/summary', () => {
     const mgr = db.people.find((p) => p.id === r.personId)?.lineManagerId ?? null;
     return mgr === u.personId && u.personId != null ? true : mgr == null && administers(u);
   }).length;
-  const toApply = administers(u) ? db.leave.filter((r) => r.status === 'approved' || r.status === 'cancel_requested').length : 0;
+  const toApply = db.leave
+    .filter((r) => r.status === 'approved' || r.status === 'cancel_requested')
+    .map(withActs(u))
+    .filter((r) => r.actions.apply || r.actions.remove).length;
   const isManager = !!u.personId && db.people.some((p) => p.lineManagerId === u.personId);
-  return { toApprove, toApply, isManager, administers: administers(u), leaveTypes: leaveTypes() };
+  return { toApprove, toApply, isManager, administers: administers(u), canRosterLockdown: canRosterLockdown(u), leaveTypes: leaveTypes() };
 });
 
 on('GET', '/leave', ({ query }) => {
@@ -841,7 +852,7 @@ on('GET', '/leave', ({ query }) => {
   if (scope === 'mine') list = db.leave.filter((r) => r.personId === u.personId);
   else if (scope === 'approve') list = db.leave.filter((r) => r.personId !== u.personId && ((u.personId != null && mgrOf(r) === u.personId) || (administers(u) && mgrOf(r) == null)));
   else if (scope === 'apply') {
-    if (!administers(u)) fail(403, 'Only leave administrators can do this');
+    if (!administers(u) && !canRosterLockdown(u)) fail(403, 'Only leave administrators, planners and supervisors can do this');
     list = db.leave.filter((r) => ['approved', 'cancel_requested', 'applied'].includes(r.status));
   } else if (scope === 'all') {
     if (!(u.role === 'planner' || administers(u))) fail(403, 'Not permitted');
@@ -858,7 +869,12 @@ on('GET', '/leave/preview', ({ query }) => {
   const pid = targetPerson(u, query.personId);
   const err = validateRequestDates(query.start, query.end, isValidIso, daysBetween);
   if (err) bad(err);
-  return { ...breakdown(pid, query.start, query.end), overlaps: overlaps(pid, query.start, query.end).map((r) => ({ id: r.id, start: r.start, end: r.end, status: r.status })) };
+  const teamId = db.people.find((p) => p.id === pid)?.teamId ?? null;
+  return {
+    ...breakdown(pid, query.start, query.end),
+    overlaps: overlaps(pid, query.start, query.end).map((r) => ({ id: r.id, start: r.start, end: r.end, status: r.status })),
+    lockdowns: lockdownsFor(db.lockdowns, teamId, query.start, query.end),
+  };
 });
 
 on('POST', '/leave', ({ body }) => {
@@ -902,7 +918,12 @@ on('POST', '/leave/:id/:action', ({ params, body }) => {
   const action = params.action;
   if (!(action in ACTION_RESULT)) fail(404, 'Unknown action');
   const r = db.leave.find((x) => x.id === Number(params.id)) || fail(404, 'Request not found');
-  if (!leaveActions(leaveView(r), viewerOf(u))[action]) fail(403, 'You cannot do that to this request now');
+  const view = withActs(u)(r);
+  if (!view.actions[action]) {
+    if (action === 'apply' && view.actions.needsSupervisor)
+      fail(403, `This leave falls in a leave lockdown (${view.lockdowns.map((l) => l.name).join(', ')}) - only a supervisor or planner can add it to the roster`);
+    fail(403, 'You cannot do that to this request now');
+  }
   const note = s(body?.note, 500) || null;
   if ((action === 'reject' || action === 'decline') && !note) bad('Give a reason so the person knows why');
   const who = db.people.find((p) => p.id === u.personId)?.name || u.username;
@@ -931,6 +952,49 @@ on('POST', '/leave/:id/:action', ({ params, body }) => {
   if (rosterChanged) changed({ type: 'roster', from: r.start, to: r.end });
   changed({ type: 'leave' });
   return { request: withActs(u)(r) };
+});
+
+// ---------------- Leave lockdowns ----------------
+const lockdownBody = (b) => {
+  const name = s(b?.name, 100);
+  if (!name) bad('Give the lockdown a name');
+  if (!isValidIso(b.start) || !isValidIso(b.end)) bad('Choose a first and last day');
+  if (b.end < b.start) bad('The last day must be on or after the first day');
+  const teamId = b.teamId == null || b.teamId === '' ? null : Number(b.teamId);
+  if (teamId != null && !db.teams.some((t) => t.id === teamId)) bad('Team not found');
+  return { name, start: b.start, end: b.end, teamId, note: s(b.note, 500) || null };
+};
+on('GET', '/lockdowns', () => {
+  need('staff');
+  return { lockdowns: lockdownList() };
+});
+on('POST', '/lockdowns', ({ body }) => {
+  const u = need('planner');
+  const l = { id: nextId(), ...lockdownBody(body) };
+  db.lockdowns.push(l);
+  audit(u, 'lockdown.create', { id: l.id, name: l.name, start: l.start, end: l.end });
+  changed({ type: 'meta' });
+  changed({ type: 'leave' });
+  return { id: l.id };
+});
+on('PUT', '/lockdowns/:id', ({ body, params }) => {
+  const u = need('planner');
+  const l = db.lockdowns.find((x) => x.id === Number(params.id)) || fail(404, 'Lockdown not found');
+  Object.assign(l, lockdownBody(body));
+  audit(u, 'lockdown.update', { id: l.id, name: l.name, start: l.start, end: l.end });
+  changed({ type: 'meta' });
+  changed({ type: 'leave' });
+  return { ok: true };
+});
+on('DELETE', '/lockdowns/:id', ({ params }) => {
+  const u = need('planner');
+  const id = Number(params.id);
+  if (!db.lockdowns.some((l) => l.id === id)) fail(404, 'Lockdown not found');
+  db.lockdowns = db.lockdowns.filter((l) => l.id !== id);
+  audit(u, 'lockdown.delete', { id });
+  changed({ type: 'meta' });
+  changed({ type: 'leave' });
+  return { ok: true };
 });
 
 // ---------------- Public holidays ----------------

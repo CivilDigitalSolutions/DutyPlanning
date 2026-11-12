@@ -162,3 +162,52 @@ test('UK bank holidays: calculation and adding them for a year', async () => {
   const list = (await sam('/public-holidays?from=2027-01-01&to=2027-12-31')).body.holidays;
   assert.equal(list.length, 8);
 });
+
+test('leave lockdowns: approval allowed, but only a supervisor or planner can add it to the roster', async () => {
+  const pat = await as('pat');
+  db.prepare("INSERT INTO users (username, password_hash, role) VALUES ('plan', ?, 'planner')").run(pw);
+  db.prepare("INSERT INTO users (username, password_hash, role, supervisor) VALUES ('sue', ?, 'staff', 1)").run(pw);
+  db.prepare("INSERT INTO teams (id, name) VALUES (2, 'Team 2')").run();
+  const sam = await as('sam');
+  const mary = await as('mary');
+  const gt = await as('gt');
+  const sue = await as('sue');
+  const plan = await as('plan');
+
+  assert.equal((await sam('/lockdowns', { name: 'Nope', start: '2031-05-01', end: '2031-05-02' })).status, 403, 'staff cannot create lockdowns');
+  assert.equal((await plan('/lockdowns', { name: 'Summer event', start: '2031-05-01', end: '2031-05-10' })).status, 200);
+  assert.equal((await plan('/lockdowns', { name: 'Team 2 only', start: '2031-06-01', end: '2031-06-05', teamId: 2 })).status, 200);
+
+  const pre = await sam('/leave/preview?start=2031-05-09&end=2031-05-12');
+  assert.deepEqual(pre.body.lockdowns.map((l) => l.name), ['Summer event']);
+  assert.deepEqual(pre.body.days.map((d) => d.lockdown), ['Summer event', 'Summer event', null, null]);
+
+  const r = (await sam('/leave', { start: '2031-05-09', end: '2031-05-12' })).body.request;
+  assert.equal(r.lockdowns[0].name, 'Summer event');
+  assert.equal((await mary(`/leave/${r.id}/approve`, {})).body.request.status, 'approved', 'manager can still approve');
+
+  const forGt = (await gt('/leave?scope=apply')).body.requests.find((x) => x.id === r.id);
+  assert.equal(forGt.actions.apply, false);
+  assert.equal(forGt.actions.needsSupervisor, true);
+  const refused = await gt(`/leave/${r.id}/apply`, {});
+  assert.equal(refused.status, 403);
+  assert.match(refused.body.error, /lockdown/);
+  assert.equal((await sam(`/leave/${r.id}/apply`, {})).status, 403, 'requester cannot add own leave');
+
+  assert.equal((await sue('/leave/summary')).body.toApply, 1, 'supervisor sees it in their queue');
+  assert.equal((await sue(`/leave/${r.id}/apply`, {})).body.request.status, 'applied');
+
+  // A team-specific lockdown does not affect other teams; planners can also apply.
+  const r2 = (await sam('/leave', { start: '2031-06-02', end: '2031-06-03' })).body.request;
+  assert.deepEqual(r2.lockdowns, []);
+  await mary(`/leave/${r2.id}/approve`, {});
+  assert.equal((await gt(`/leave/${r2.id}/apply`, {})).body.request.status, 'applied');
+  const r3 = (await pat('/leave', { start: '2031-05-02', end: '2031-05-02' })).body.request;
+  await mary(`/leave/${r3.id}/approve`, {});
+  assert.equal((await plan(`/leave/${r3.id}/apply`, {})).body.request.status, 'applied');
+
+  const lockdowns = (await sam('/lockdowns')).body.lockdowns;
+  assert.equal(lockdowns.length, 2);
+  const roster = await sam('/roster?from=2031-05-01&to=2031-05-31');
+  assert.deepEqual(roster.body.lockdowns.map((l) => l.name), ['Summer event']);
+});

@@ -1,12 +1,14 @@
 // Annual leave requests: request -> line manager approval -> leave administrator applies to roster.
 import { tx, audit } from './db.js';
 import { daysBetween, eachDate, isValidIso } from './dates.js';
-import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, validateRequestDates } from './leave-rules.js';
+import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, validateRequestDates, lockdownsFor, canRosterLockdown } from './leave-rules.js';
 
-export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, broadcast, cfg }) {
+export function registerLeaveRoutes(app, { db, staff, planner, json, wrap, HttpError, broadcast }) {
   const bad = (m) => new HttpError(400, m);
   const s = (v, max) => (v == null ? '' : String(v).trim().slice(0, max));
-  const viewerOf = (u) => ({ personId: u.personId, role: u.role, leaveAdmin: u.leaveAdmin });
+  const viewerOf = (u) => ({ personId: u.personId, role: u.role, leaveAdmin: u.leaveAdmin, supervisor: u.supervisor });
+  const allLockdowns = () =>
+    db.prepare('SELECT l.id, l.name, l.start_date AS start, l.end_date AS end, l.team_id AS teamId, t.name AS teamName, l.note FROM leave_lockdowns l LEFT JOIN teams t ON t.id = l.team_id ORDER BY l.start_date').all();
   const administers = (u) => u.role === 'admin' || u.leaveAdmin;
 
   const codeExists = (c) => !!db.prepare('SELECT 1 FROM duty_codes WHERE code = ?').get(c);
@@ -29,7 +31,12 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
     LEFT JOIN people dp ON dp.id = du.person_id
     LEFT JOIN users au ON au.id = r.applied_by
     LEFT JOIN people ap ON ap.id = au.person_id`;
-  const withActions = (u) => (r) => ({ ...r, actions: leaveActions(r, viewerOf(u)) });
+  // Attach the lockdowns a request falls in, and what the viewer may do with it.
+  const withActions = (u, lockdowns = allLockdowns()) => (r) => {
+    const out = { ...r, lockdowns: lockdownsFor(lockdowns, r.teamId, r.start, r.end).map(({ id, name, start, end }) => ({ id, name, start, end })) };
+    out.actions = leaveActions(out, viewerOf(u));
+    return out;
+  };
   const getRequest = (id) => db.prepare(`${SELECT} WHERE r.id = ?`).get(Number(id));
 
   function breakdownFor(personId, start, end) {
@@ -46,9 +53,11 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
         )
         .all(person.team_id, start, end))
         counts.set(r.date, r.n);
+    const locks = lockdownsFor(allLockdowns(), person?.team_id ?? null, start, end);
     const hols = new Map(db.prepare('SELECT date, name FROM public_holidays WHERE date BETWEEN ? AND ?').all(start, end).map((h) => [h.date, h.name]));
     return leaveBreakdown({
       holidayAt: (d) => hols.get(d),
+      lockdownAt: (d) => locks.find((l) => l.start <= d && l.end >= d)?.name,
       dates: eachDate(start, end),
       codeAt: (d) => own.get(d),
       info: (c) => info.get(c.toLowerCase()),
@@ -85,9 +94,11 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
          WHERE r.status = 'pending' AND r.person_id IS NOT ? AND (p.line_manager_id = ?${administers(u) ? ' OR p.line_manager_id IS NULL' : ''})`,
       )
       .get(u.personId ?? -1, u.personId ?? -1).n;
-    const toApply = administers(u) ? db.prepare("SELECT COUNT(*) AS n FROM leave_requests WHERE status IN ('approved','cancel_requested')").get().n : 0;
+    // Requests this person can actually add to (or take off) the roster now.
+    const queue = administers(u) || canRosterLockdown(u) ? db.prepare(`${SELECT} WHERE r.status IN ('approved','cancel_requested')`).all().map(withActions(u)) : [];
+    const toApply = queue.filter((r) => r.actions.apply || r.actions.remove).length;
     const isManager = !!(u.personId && db.prepare('SELECT 1 FROM people WHERE line_manager_id = ? LIMIT 1').get(u.personId));
-    return { toApprove, toApply, isManager, administers: administers(u), leaveTypes: leaveTypes() };
+    return { toApprove, toApply, isManager, administers: administers(u), canRosterLockdown: canRosterLockdown(u), leaveTypes: leaveTypes() };
   }
 
   app.get('/api/leave/summary', staff, (req, res) => res.json(summary(req.user)));
@@ -107,7 +118,7 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
       where = '(p.line_manager_id = ?' + (administers(u) ? ' OR p.line_manager_id IS NULL' : '') + ') AND r.person_id IS NOT ?';
       args = [u.personId ?? -1, u.personId ?? -1];
     } else if (scope === 'apply') {
-      if (!administers(u)) throw new HttpError(403, 'Only leave administrators can do this');
+      if (!administers(u) && !canRosterLockdown(u)) throw new HttpError(403, 'Only leave administrators, planners and supervisors can do this');
       where = "r.status IN ('approved','cancel_requested','applied')";
     } else if (scope === 'all') {
       if (!(u.role === 'planner' || administers(u))) throw new HttpError(403, 'Not permitted');
@@ -123,7 +134,8 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
       args.push(from);
     }
     const rows = db.prepare(`${SELECT} WHERE ${where} ORDER BY CASE r.status WHEN 'pending' THEN 0 WHEN 'cancel_requested' THEN 1 WHEN 'approved' THEN 2 ELSE 3 END, r.start_date DESC LIMIT 500`).all(...args);
-    res.json({ requests: rows.map(withActions(u)) });
+    const locks = allLockdowns();
+    res.json({ requests: rows.map(withActions(u, locks)) });
   });
 
   // Preview a request before it is made: working days, clashes and team cover.
@@ -133,7 +145,8 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
     const err = validateRequestDates(req.query.start, req.query.end, isValidIso, daysBetween);
     if (err) throw bad(err);
     const b = breakdownFor(personId, req.query.start, req.query.end);
-    res.json({ ...b, overlaps: overlapping(personId, req.query.start, req.query.end) });
+    const teamId = db.prepare('SELECT team_id FROM people WHERE id = ?').get(personId)?.team_id ?? null;
+    res.json({ ...b, overlaps: overlapping(personId, req.query.start, req.query.end), lockdowns: lockdownsFor(allLockdowns(), teamId, req.query.start, req.query.end) });
   });
 
   app.post(
@@ -190,9 +203,14 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
       const u = req.user;
       const action = req.params.action;
       if (!(action in ACTION_RESULT)) throw new HttpError(404, 'Unknown action');
-      const r = getRequest(req.params.id);
-      if (!r) throw new HttpError(404, 'Request not found');
-      if (!leaveActions(r, viewerOf(u))[action]) throw new HttpError(403, 'You cannot do that to this request now');
+      const found = getRequest(req.params.id);
+      if (!found) throw new HttpError(404, 'Request not found');
+      const r = withActions(u)(found);
+      if (!r.actions[action]) {
+        if (action === 'apply' && r.actions.needsSupervisor)
+          throw new HttpError(403, `This leave falls in a leave lockdown (${r.lockdowns.map((l) => l.name).join(', ')}) - only a supervisor or planner can add it to the roster`);
+        throw new HttpError(403, 'You cannot do that to this request now');
+      }
       const note = s(req.body?.note, 500) || null;
       if ((action === 'reject' || action === 'decline') && !note) throw bad('Give a reason so the person knows why');
       const next = ACTION_RESULT[action];
@@ -246,6 +264,57 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
       if (rosterChanged) broadcast({ type: 'roster', from: r.start, to: r.end });
       broadcast({ type: 'leave' });
       res.json({ request: withActions(u)(getRequest(r.id)) });
+    }),
+  );
+
+  // ---------------- Leave lockdowns ----------------
+  app.get('/api/lockdowns', staff, (req, res) => res.json({ lockdowns: allLockdowns() }));
+  const lockdownBody = (b) => {
+    const name = s(b.name, 100);
+    if (!name) throw bad('Give the lockdown a name');
+    if (!isValidIso(b.start) || !isValidIso(b.end)) throw bad('Choose a first and last day');
+    if (b.end < b.start) throw bad('The last day must be on or after the first day');
+    const teamId = b.teamId == null || b.teamId === '' ? null : Number(b.teamId);
+    if (teamId != null && !db.prepare('SELECT 1 FROM teams WHERE id = ?').get(teamId)) throw bad('Team not found');
+    return [name, b.start, b.end, teamId, s(b.note, 500) || null];
+  };
+  app.post(
+    '/api/lockdowns',
+    planner,
+    json,
+    wrap((req, res) => {
+      const v = lockdownBody(req.body || {});
+      const id = Number(db.prepare('INSERT INTO leave_lockdowns (name, start_date, end_date, team_id, note) VALUES (?,?,?,?,?)').run(...v).lastInsertRowid);
+      audit(db, req.user, 'lockdown.create', { id, name: v[0], start: v[1], end: v[2], teamId: v[3] });
+      broadcast({ type: 'meta' });
+      broadcast({ type: 'leave' });
+      res.json({ id });
+    }),
+  );
+  app.put(
+    '/api/lockdowns/:id',
+    planner,
+    json,
+    wrap((req, res) => {
+      const v = lockdownBody(req.body || {});
+      const r = db.prepare('UPDATE leave_lockdowns SET name=?, start_date=?, end_date=?, team_id=?, note=? WHERE id=?').run(...v, Number(req.params.id));
+      if (!r.changes) throw new HttpError(404, 'Lockdown not found');
+      audit(db, req.user, 'lockdown.update', { id: Number(req.params.id), name: v[0], start: v[1], end: v[2], teamId: v[3] });
+      broadcast({ type: 'meta' });
+      broadcast({ type: 'leave' });
+      res.json({ ok: true });
+    }),
+  );
+  app.delete(
+    '/api/lockdowns/:id',
+    planner,
+    wrap((req, res) => {
+      const r = db.prepare('DELETE FROM leave_lockdowns WHERE id = ?').run(Number(req.params.id));
+      if (!r.changes) throw new HttpError(404, 'Lockdown not found');
+      audit(db, req.user, 'lockdown.delete', { id: Number(req.params.id) });
+      broadcast({ type: 'meta' });
+      broadcast({ type: 'leave' });
+      res.json({ ok: true });
     }),
   );
 }

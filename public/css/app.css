@@ -19,6 +19,8 @@
   --vacant: repeating-linear-gradient(135deg, transparent 0 6px, rgba(0, 0, 0, 0.04) 6px 12px);
   --ph: #7a3fb8;
   --ph-bg: rgba(122, 63, 184, 0.09);
+  --lock: #b42318;
+  --lock-bg: rgba(180, 35, 24, 0.08);
   --radius: 10px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
   --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.18);
@@ -32,6 +34,8 @@
   :root:not([data-theme='light']) {
     --ph: #c39bf0;
     --ph-bg: rgba(195, 155, 240, 0.12);
+    --lock: #f97066;
+    --lock-bg: rgba(249, 112, 102, 0.12);
     --bg: #0f1720;
     --surface: #17212c;
     --surface-2: #1c2834;
@@ -50,6 +54,8 @@
 :root[data-theme='dark'] {
   --ph: #c39bf0;
   --ph-bg: rgba(195, 155, 240, 0.12);
+  --lock: #f97066;
+  --lock-bg: rgba(249, 112, 102, 0.12);
   --bg: #0f1720;
   --surface: #17212c;
   --surface-2: #1c2834;
@@ -1626,4 +1632,39 @@ code {
 td.hol-date {
   width: 220px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Leave lockdowns */
+.lock-note {
+  font-size: 13px;
+  color: var(--lock);
+}
+.lock-box {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--lock);
+  background: var(--lock-bg);
+  color: var(--text);
+}
+.lock-name {
+  font-size: 11px;
+  color: var(--lock);
+  font-weight: 600;
+}
+.grid th.d.lock {
+  box-shadow: inset 0 3px 0 var(--lock);
+}
+.grid th.d.lock.ph {
+  box-shadow: inset 0 3px 0 var(--lock), inset 0 -3px 0 var(--ph);
+}
+.grid td.cnt.lock {
+  background-image: linear-gradient(var(--lock-bg), var(--lock-bg));
+}
+.legend-lock {
+  display: inline-block;
+  width: 28px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--lock);
+  vertical-align: middle;
 }

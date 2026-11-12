@@ -84,7 +84,7 @@ export function seedDemo(today) {
   db.users = [
     { id: nextId(), username: 'admin', password: 'admin1234', role: 'admin', personId: null, mustChangePassword: false },
     { id: nextId(), username: 'planner', password: 'planner1234', role: 'planner', personId: pidOf('1002'), mustChangePassword: false, leaveAdmin: true },
-    { id: nextId(), username: '1001', password: 'staff1234', role: 'staff', personId: pidOf('1001'), mustChangePassword: false },
+    { id: nextId(), username: '1001', password: 'staff1234', role: 'staff', personId: pidOf('1001'), mustChangePassword: false, supervisor: true },
   ];
   const yr = Number(today.slice(0, 4));
   db.holidays = Object.fromEntries([...ukBankHolidays(yr), ...ukBankHolidays(yr + 1)].map((h) => [h.date, h.name]));
@@ -102,6 +102,7 @@ export function seedDemo(today) {
     db.leaveEvents.push({ id: nextId(), requestId: rid, at: now, username: db.people.find((p) => p.id === pid).name, action: 'requested', note });
     if (status !== 'pending') db.leaveEvents.push({ id: nextId(), requestId: rid, at: now, username: 'Team leader', action: status === 'rejected' ? 'reject' : 'approve', note: null });
   };
+  db.lockdowns = [{ id: nextId(), name: 'Winter operation', start: addDays(today, 26), end: addDays(today, 40), teamId: null, note: 'Maximum staffing needed for the winter operation' }];
   leave('1003', 21, 7, 'pending', 'Family holiday');
   leave('1005', 35, 4, 'pending', null);
   leave('1001', 49, 5, 'pending', 'Long weekend away');

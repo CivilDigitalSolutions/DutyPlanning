@@ -9,6 +9,7 @@ const TABS = [
   ['codes', 'Duty codes'],
   ['accreditations', 'Accreditations'],
   ['holidays', 'Public holidays'],
+  ['lockdowns', 'Leave lockdowns'],
   ['import', 'Import / export'],
   ['users', 'User accounts', true],
   ['audit', 'Activity log', true],
@@ -24,7 +25,7 @@ export async function render(root, params) {
       <div class="admin-body"></div>
     </section>`;
   const body = $('.admin-body', root);
-  const handlers = { people, teams, codes, accreditations, holidays, import: importExport, users, audit };
+  const handlers = { people, teams, codes, accreditations, holidays, lockdowns, import: importExport, users, audit };
   await handlers[tab](body, params.slice(1));
 }
 
@@ -299,6 +300,64 @@ function accreditations(body) {
   });
 }
 
+// ---------------- Leave lockdowns ----------------
+async function lockdowns(body) {
+  const { lockdowns: list } = await get('/lockdowns');
+  const today = todayIso();
+  const current = list.filter((l) => l.end >= today);
+  const past = list.filter((l) => l.end < today);
+  const row = (l) =>
+    html`<tr class="${l.end < today ? 'inactive' : ''}"><td><b>${l.name}</b>${l.note ? html`<div class="muted small">${l.note}</div>` : ''}</td>
+      <td>${l.start === l.end ? fmtDate(l.start, 'dmy') : `${fmtDate(l.start, 'dm')} – ${fmtDate(l.end, 'dmy')}`}</td>
+      <td>${l.teamName || 'All teams'}</td>
+      <td class="actions"><button class="btn btn-sm" data-edit="${l.id}">Edit</button></td></tr>`;
+  body.innerHTML = html`
+    <div class="toolbar"><h2>Leave lockdowns</h2><span class="spacer"></span><button class="btn btn-primary" data-act="add">Add lockdown</button></div>
+    <p class="muted">During a lockdown, line managers can still approve leave, but only a <b>supervisor</b> or <b>planner</b> can add it to the roster.
+      Lockdowns are shown on people's leave requests and marked on the plan. Tick <b>Supervisor</b> on a user account to let them add lockdown leave.</p>
+    ${current.length
+      ? html`<div class="table-wrap"><table class="data"><thead><tr><th>Lockdown</th><th>Dates</th><th>Applies to</th><th></th></tr></thead><tbody>${current.map(row)}</tbody></table></div>`
+      : html`<p class="empty-inline">No current or upcoming lockdowns.</p>`}
+    ${past.length ? html`<details><summary>Past lockdowns (${past.length})</summary><div class="table-wrap"><table class="data"><tbody>${past.map(row)}</tbody></table></div></details>` : ''}`;
+  const reload = () => lockdowns(body);
+  const open = (l) => {
+    const d = formDialog(
+      l ? `Edit ${l.name}` : 'Add leave lockdown',
+      html`<div class="form-grid">
+        <label class="span2">Name<input name="name" value="${l?.name || ''}" required maxlength="100" placeholder="e.g. Christmas operation" /></label>
+        <label>First day<input type="date" name="start" value="${l?.start || ''}" required /></label>
+        <label>Last day<input type="date" name="end" value="${l?.end || ''}" required /></label>
+        <label class="span2">Applies to<select name="teamId"><option value="">All teams</option>${state.meta.teams.map((t) => html`<option value="${t.id}" ${l?.teamId === t.id ? 'selected' : ''}>${t.name}</option>`)}</select></label>
+        <label class="span2">Reason (shown to staff)<textarea name="note" rows="2" maxlength="500">${l?.note || ''}</textarea></label>
+      </div>`,
+      async (v) => {
+        if (l) await put(`/lockdowns/${l.id}`, v);
+        else await post('/lockdowns', v);
+        toast('Saved', 'success');
+        reload();
+      },
+      { extraActions: l ? '<button value="delete" class="btn btn-danger" formnovalidate>Delete</button>' : '' },
+    );
+    $('form', d).addEventListener('submit', async (e) => {
+      if (e.submitter?.value !== 'delete') return;
+      e.preventDefault();
+      if (!(await confirmDialog(`Delete the lockdown "${l.name}"? Leave already on the roster is not changed.`, 'Delete', true))) return;
+      try {
+        await del(`/lockdowns/${l.id}`);
+        d.close();
+        reload();
+      } catch (ex) {
+        toast(ex.message, 'error');
+      }
+    });
+  };
+  body.onclick = (e) => {
+    if (e.target.closest('[data-act=add]')) open(null);
+    const id = e.target.closest('[data-edit]')?.dataset.edit;
+    if (id) open(list.find((l) => l.id === Number(id)));
+  };
+}
+
 // ---------------- Public holidays ----------------
 async function holidays(body) {
   const year = Number(todayIso().slice(0, 4));
@@ -453,18 +512,19 @@ async function users(body) {
       .filter((p) => p.active && p.id !== pid)
       .map((p) => html`<option value="${p.id}" ${cur === p.id ? 'selected' : ''}>${p.name} (${p.staffNumber})</option>`)}`;
   };
-  const leaveAdminBox = (on) =>
-    html`<label class="check span2"><input type="checkbox" name="leaveAdmin" ${on ? 'checked' : ''} /> Leave administrator - adds approved leave to the roster and handles cancellations</label>`;
+  const leaveAdminBox = (on, sup) =>
+    html`<label class="check span2"><input type="checkbox" name="leaveAdmin" ${on ? 'checked' : ''} /> Leave administrator - adds approved leave to the roster and handles cancellations</label>
+      <label class="check span2"><input type="checkbox" name="supervisor" ${sup ? 'checked' : ''} /> Supervisor - can add leave that falls in a leave lockdown to the roster (planners and admins always can)</label>`;
   body.innerHTML = html`
     <div class="toolbar"><h2>User accounts</h2><span class="spacer"></span>
       <button class="btn" data-act="bulk">Create logins for everyone (${unlinked})</button>
       <button class="btn" data-act="import">Import users</button>
       <button class="btn btn-primary" data-act="add">Add user</button></div>
     <p class="muted">People sign in with their email address or staff number. To add many new people at once, use <b>Import users</b> with the template. Planners can edit the plan; admins can also manage accounts. Linking an account to a person shows them "My duties".</p>
-    <div class="table-wrap"><table class="data"><thead><tr><th>Username</th><th>Role</th><th>Person</th><th>Line manager</th><th>Leave admin</th><th>Status</th><th></th></tr></thead>
+    <div class="table-wrap"><table class="data"><thead><tr><th>Username</th><th>Role</th><th>Person</th><th>Line manager</th><th>Leave admin</th><th>Supervisor</th><th>Status</th><th></th></tr></thead>
     <tbody>${list.map(
       (u) => html`<tr><td>${u.username}</td><td>${u.role}</td><td>${u.personName || html`<span class="muted">–</span>`}</td>
-        <td>${managerName(u.personId)}</td><td>${u.leaveAdmin ? 'Yes' : ''}</td>
+        <td>${managerName(u.personId)}</td><td>${u.leaveAdmin ? 'Yes' : ''}</td><td>${u.supervisor ? 'Yes' : ''}</td>
         <td>${u.mustChangePassword ? 'Must change password' : 'Active'}</td><td class="actions"><button class="btn btn-sm" data-edit="${u.id}">Edit</button></td></tr>`,
     )}</tbody></table></div>`;
   const reload = () => users(body);
@@ -480,11 +540,11 @@ async function users(body) {
           <label>Username<input name="username" required maxlength="100" /></label>
           <label>Role${roleSel('staff')}</label>
           <label class="span2">Linked person<select name="personId">${personOptions(null)}</select></label>
-          ${leaveAdminBox(false)}
+          ${leaveAdminBox(false, false)}
           <label class="span2">Temporary password<input name="password" type="text" minlength="8" required autocomplete="off" /></label>
           <p class="span2 muted">They will be asked to change it at first sign-in.</p></div>`,
         async (v, form) => {
-          await post('/users', { ...v, personId: v.personId || null, leaveAdmin: form.leaveAdmin.checked });
+          await post('/users', { ...v, personId: v.personId || null, leaveAdmin: form.leaveAdmin.checked, supervisor: form.supervisor.checked });
           reload();
         },
       );
@@ -508,11 +568,11 @@ async function users(body) {
           <label>Role${roleSel(u.role)}</label>
           <label>Linked person<select name="personId">${personOptions(u.personId)}</select></label>
           <label class="span2">Line manager <small class="muted">(approves this person's leave)</small><select name="lineManagerId" ${u.personId ? '' : 'disabled'}>${managerOptions(u.personId)}</select></label>
-          ${leaveAdminBox(u.leaveAdmin)}
+          ${leaveAdminBox(u.leaveAdmin, u.supervisor)}
           <label class="span2">Reset password <small class="muted">(leave blank to keep)</small><input name="password" type="text" minlength="8" autocomplete="off" /></label></div>`,
         async (v, form) => {
           const personId = v.personId ? Number(v.personId) : null;
-          await put(`/users/${u.id}`, { ...v, personId, leaveAdmin: form.leaveAdmin.checked, password: v.password || undefined });
+          await put(`/users/${u.id}`, { ...v, personId, leaveAdmin: form.leaveAdmin.checked, supervisor: form.supervisor.checked, password: v.password || undefined });
           if (personId && !form.lineManagerId.disabled && (Number(v.lineManagerId) || null) !== (pById.get(personId)?.lineManagerId ?? null))
             await put(`/people/${personId}/line-manager`, { lineManagerId: v.lineManagerId || null });
           reload();
@@ -674,6 +734,7 @@ async function audit(body) {
     if (!d) return '';
     if (e.action === 'assignments.update') return `${d.count} cell(s) ${d.from}${d.to !== d.from ? ` to ${d.to}` : ''}`;
     if (e.action === 'assignments.pattern') return `${d.personIds.length} people, ${d.from} to ${d.to}: ${d.pattern.map((x) => x || '-').join(' ')}`;
+    if (e.action.startsWith('lockdown.')) return d.name ? `${d.name}: ${d.start} to ${d.end}` : `Lockdown #${d.id}`;
     if (e.action.startsWith('holiday.')) return d.year ? `${d.year} ${d.region}: ${d.added} added` : `${d.date}${d.name ? ' ' + d.name : ''}`;
     if (e.action.startsWith('leave.')) return `Request #${d.id}: ${d.start} to ${d.end}`;
     if (e.action === 'user.import') return `${d.created} added, ${d.updated} updated, ${d.accountsCreated} accounts`;

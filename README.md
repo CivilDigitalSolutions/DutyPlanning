@@ -46,11 +46,14 @@ Staff No | Name | Initials | Mobile | [Team] | <accreditation columns…> | 01/1
 | 3. Add to roster | A **leave administrator** (Leave → To add to roster) | Chooses the leave code (default AL) and checks a preview of every day, then adds it. Working days become **AL**, rest days become **Rest Day - AL** (`RD-AL`), and public holidays become **Public holiday - AL** (`PH-AL`). Existing leave such as sickness is left alone. The duties it replaced are remembered. |
 | Cancel | The person | They can cancel while it's pending or approved. Once it's on the roster they **ask to cancel**, and a leave administrator removes it (their original duties are restored) or keeps it. |
 
+**Leave lockdowns** (Manage → Leave lockdowns) are periods when leave needs extra control, such as a major operation. They can cover all teams or one team. During a lockdown, line managers can still approve leave, but **only a supervisor or a planner** (planners, admins, and accounts with the **Supervisor** tick box) can add it to the roster. Ordinary leave administrators see "needs a supervisor or planner" instead of the button. Lockdowns are shown on the request form, on each request and its day-by-day breakdown, and as a red edge on the plan's date headers.
+
 **Public holidays** are kept under Manage → Public holidays. **Add UK bank holidays** fills in a whole year for England and Wales, Scotland or Northern Ireland, including substitute days. One-off holidays (e.g. a coronation) are added by hand. Holidays are highlighted on the plan, Day view and My duties, and aren't counted as working days of leave.
 
 **Set-up:**
 - **Line manager** is a field on each person. Set it under Manage → People, under Manage → User accounts → Edit, or with the *Line manager email* column in the bulk import template.
 - **Leave administrator** is a tick box on each user account (Manage → User accounts → Edit). Use it for whoever applies leave to the roster. Admins can always do it.
+- **Supervisor** is another tick box on user accounts. It lets someone add leave that falls in a lockdown to the roster.
 - The **Leave** tab shows a badge with the number of requests waiting for you. Every step is recorded on the request's history and in the activity log.
 
 ## Bulk importing new users

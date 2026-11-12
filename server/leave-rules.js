@@ -20,10 +20,18 @@ export const STATUS_LABELS = {
 };
 export const MAX_REQUEST_DAYS = 60;
 
+/** Lockdown periods that cover any part of start..end for someone in teamId (null team = all teams). */
+export function lockdownsFor(lockdowns, teamId, start, end) {
+  return lockdowns.filter((l) => l.start <= end && l.end >= start && (l.teamId == null || l.teamId === teamId));
+}
+
+/** Only planners, admins and supervisors may add leave that falls in a lockdown to the roster. */
+export const canRosterLockdown = (viewer) => viewer.role === 'planner' || viewer.role === 'admin' || !!viewer.supervisor;
+
 /**
  * What the viewer may do with a request.
- * req: { personId, managerPersonId, status }
- * viewer: { personId, role, leaveAdmin }
+ * req: { personId, managerPersonId, status, lockdowns: [] }
+ * viewer: { personId, role, leaveAdmin, supervisor }
  */
 export function leaveActions(req, viewer) {
   const isOwner = viewer.personId != null && req.personId === viewer.personId;
@@ -31,12 +39,16 @@ export function leaveActions(req, viewer) {
   const isAdmin = viewer.role === 'admin';
   const administers = isAdmin || !!viewer.leaveAdmin;
   const s = req.status;
+  const locked = (req.lockdowns || []).length > 0;
   return {
     // Managers decide for their reports; admins (or leave administrators, when no manager is set) can stand in.
     // Nobody approves their own leave.
     approve: s === 'pending' && !isOwner && (isManager || isAdmin || (req.managerPersonId == null && administers)),
     reject: s === 'pending' && !isOwner && (isManager || isAdmin || (req.managerPersonId == null && administers)),
-    apply: s === 'approved' && administers,
+    // In a lockdown, approved leave waits for a planner, admin or supervisor (not the person themselves).
+    apply: s === 'approved' && (locked ? canRosterLockdown(viewer) && !isOwner : administers),
+    // Shown to leave administrators so they know why they can't add it.
+    needsSupervisor: s === 'approved' && locked && !(canRosterLockdown(viewer) && !isOwner),
     decline: s === 'approved' && administers && !isOwner,
     cancel: isOwner && (s === 'pending' || s === 'approved'),
     requestCancel: isOwner && s === 'applied',
@@ -70,11 +82,12 @@ const isWeekday = (iso) => {
  * @param teamOnDuty (date) => number of the person's team on a duty that day (including them)
  * @param minStrength team minimum or null
  * @param holidayAt (date) => public holiday name or null
+ * @param lockdownAt (date) => lockdown name or null
  * A day counts as a working day of leave when the person is rostered to work it (duty or
  * training), or - where nothing is planned yet - when it is a weekday. Public holidays
  * and rest days are not counted.
  */
-export function leaveBreakdown({ dates, codeAt, info, teamOnDuty, minStrength, holidayAt }) {
+export function leaveBreakdown({ dates, codeAt, info, teamOnDuty, minStrength, holidayAt, lockdownAt }) {
   const days = dates.map((date) => {
     const code = codeAt(date) || null;
     const category = code ? info(code)?.category || 'other' : null;
@@ -83,7 +96,8 @@ export function leaveBreakdown({ dates, codeAt, info, teamOnDuty, minStrength, h
     const onShift = category === 'duty';
     const onDuty = teamOnDuty ? teamOnDuty(date) : null;
     const coverLow = onShift && minStrength != null && onDuty != null && onDuty - 1 < minStrength;
-    return { date, code, category, publicHoliday, working, teamOnDuty: onDuty, teamAfter: onShift && onDuty != null ? onDuty - 1 : onDuty, coverLow };
+    const lockdown = (lockdownAt && lockdownAt(date)) || null;
+    return { date, code, category, publicHoliday, lockdown, working, teamOnDuty: onDuty, teamAfter: onShift && onDuty != null ? onDuty - 1 : onDuty, coverLow };
   });
   return { days, workingDays: days.filter((d) => d.working).length, coverWarnings: days.filter((d) => d.coverLow).length };
 }

@@ -21,7 +21,7 @@ const from = addDays(today, -14);
 const to = addDays(today, 120);
 
 tx(db, () => {
-  db.exec('DELETE FROM leave_events; DELETE FROM leave_requests; DELETE FROM assignments; DELETE FROM person_accreditations; DELETE FROM people; DELETE FROM teams; DELETE FROM accreditations;');
+  db.exec('DELETE FROM leave_lockdowns; DELETE FROM leave_events; DELETE FROM leave_requests; DELETE FROM assignments; DELETE FROM person_accreditations; DELETE FROM people; DELETE FROM teams; DELETE FROM accreditations;');
   const accs = [
     ['FA', 'First Aid'],
     ['DRV', 'Response Driver'],
@@ -94,6 +94,12 @@ tx(db, () => {
     db.prepare("INSERT INTO leave_events (request_id, username, action, note) VALUES (?, ?, 'requested', ?)").run(id, sn, note);
     if (status !== 'pending') db.prepare('INSERT INTO leave_events (request_id, username, action, note) VALUES (?, ?, ?, ?)').run(id, 'manager', status === 'rejected' ? 'reject' : 'approve', null);
   };
+  db.prepare('INSERT INTO leave_lockdowns (name, start_date, end_date, note) VALUES (?,?,?,?)').run(
+    'Winter operation',
+    addDays(today, 26),
+    addDays(today, 40),
+    'Maximum staffing needed for the winter operation',
+  );
   leave('1003', 21, 7, 'pending', 'Family holiday');
   leave('1005', 35, 4, 'pending', null);
   leave('1001', 49, 5, 'pending', 'Long weekend away');
@@ -112,10 +118,11 @@ tx(db, () => {
   user('planner', 'planner1234', 'planner', db.prepare("SELECT id FROM people WHERE staff_number='1002'").get().id);
   db.prepare("UPDATE users SET leave_admin = 1 WHERE username = 'planner'").run();
   user('1001', 'staff1234', 'staff', db.prepare("SELECT id FROM people WHERE staff_number='1001'").get().id);
+  db.prepare("UPDATE users SET supervisor = 1 WHERE username = '1001'").run();
 });
 
 console.log(`Demo data loaded for ${from} to ${to}.`);
-console.log('Logins: admin/admin1234 (admin), planner/planner1234 (planner + leave administrator), 1001/staff1234 (staff, manages Team 1)');
+console.log('Logins: admin/admin1234 (admin), planner/planner1234 (planner + leave administrator), 1001/staff1234 (staff, manages Team 1, supervisor)');
 
 const xi = process.argv.indexOf('--xlsx');
 if (xi > 0) {

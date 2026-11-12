@@ -236,10 +236,18 @@ export async function render(root) {
       i += n;
     }
     h += '</tr><tr>';
-    for (const d of dates)
-      h += `<th class="d${isWeekend(d) ? ' we' : ''}${d === today ? ' td' : ''}${data.publicHolidays?.[d] ? ' ph' : ''}" data-date="${d}"${
-        data.publicHolidays?.[d] ? ` title="${esc(data.publicHolidays[d])}"` : ''
-      }><span>${data.publicHolidays?.[d] ? 'Hol' : esc(fmtDate(d, 'dow').slice(0, 2))}</span><b>${dayNum(d)}</b></th>`;
+    // Lockdowns that apply to the teams on screen (all-team lockdowns, or one of the visible teams).
+    const shownTeams = v.teams.length ? v.teams : data.teams.map((t) => t.id);
+    const locksOn = (d, teamId) =>
+      (data.lockdowns || []).filter((l) => l.start <= d && l.end >= d && (l.teamId == null || (teamId != null ? l.teamId === teamId : shownTeams.includes(l.teamId))));
+    for (const d of dates) {
+      const hol = data.publicHolidays?.[d];
+      const locks = locksOn(d);
+      const title = [hol, ...locks.map((l) => `Leave lockdown: ${l.name}`)].filter(Boolean).join(' · ');
+      h += `<th class="d${isWeekend(d) ? ' we' : ''}${d === today ? ' td' : ''}${hol ? ' ph' : ''}${locks.length ? ' lock' : ''}" data-date="${d}"${
+        title ? ` title="${esc(title)}"` : ''
+      }><span>${hol ? 'Hol' : esc(fmtDate(d, 'dow').slice(0, 2))}</span><b>${dayNum(d)}</b></th>`;
+    }
     h += '</tr></thead>';
 
     personRows = [];
@@ -256,7 +264,8 @@ export async function render(root) {
       if (fixed > 1) body += `<td class="fx" colspan="${fixed - 1}"></td>`;
       counts.forEach((n, ci) => {
         const low = t.minStrength != null && n < t.minStrength;
-        body += `<td class="cnt${low ? ' low' : ''}${isWeekend(dates[ci]) ? ' we' : ''}" title="${n} on duty${t.minStrength != null ? ` (minimum ${t.minStrength})` : ''}">${n}</td>`;
+        const teamLocked = (data.lockdowns || []).some((l) => l.teamId === t.id && l.start <= dates[ci] && l.end >= dates[ci]);
+        body += `<td class="cnt${low ? ' low' : ''}${isWeekend(dates[ci]) ? ' we' : ''}${teamLocked ? ' lock' : ''}" title="${n} on duty${t.minStrength != null ? ` (minimum ${t.minStrength})` : ''}${teamLocked ? ' - leave lockdown for this team' : ''}">${n}</td>`;
       });
       body += '</tr>';
       for (const p of g.people) {
@@ -662,6 +671,7 @@ export async function render(root) {
           ([cat, codes]) => html`<h3>${cat[0].toUpperCase() + cat.slice(1)}</h3>
             <ul>${codes.map((c) => html`<li><span class="chip" style="${cellStyle(c.code)}">${c.code}</span> ${c.label}${c.private ? html` <small class="muted">(private)</small>` : ''}</li>`)}</ul>`,
         )}
+        <h3>Dates</h3><p class="muted"><span class="holiday-tag">Hol</span> public holiday · <span class="legend-lock"></span> leave lockdown (hover a date for its name)</p>
         <h3>Counts</h3><p class="muted">Numbers on team rows show how many people are on a duty (not rest, leave or training) each day. Red means below the team's minimum.</p>
       </div>`,
     );

@@ -159,6 +159,7 @@ export function createApp(db, config = {}) {
         username: req.user.username,
         role: req.user.role,
         leaveAdmin: req.user.leaveAdmin,
+        supervisor: req.user.supervisor,
         mustChangePassword: req.user.mustChangePassword,
         person,
       },
@@ -259,7 +260,10 @@ export function createApp(db, config = {}) {
         return a.n && (isPlanner || own) ? [a.p, a.d, a.c, a.n] : [a.p, a.d, a.c];
       });
     const publicHolidays = Object.fromEntries(db.prepare('SELECT date, name FROM public_holidays WHERE date BETWEEN ? AND ?').all(from, to).map((h) => [h.date, h.name]));
-    res.json({ from, to, teams: listTeams(), people, assignments, publicHolidays });
+    const lockdowns = db
+      .prepare('SELECT id, name, start_date AS start, end_date AS end, team_id AS teamId FROM leave_lockdowns WHERE start_date <= ? AND end_date >= ? ORDER BY start_date')
+      .all(to, from);
+    res.json({ from, to, teams: listTeams(), people, assignments, publicHolidays, lockdowns });
   });
 
   const validCode = (code) => db.prepare('SELECT code FROM duty_codes WHERE code = ?').get(code)?.code;
@@ -700,12 +704,12 @@ export function createApp(db, config = {}) {
   app.get('/api/users', admin, (req, res) => {
     const users = db
       .prepare(
-        `SELECT u.id, u.username, u.role, u.person_id AS personId, u.must_change_password AS mustChangePassword, u.leave_admin AS leaveAdmin,
+        `SELECT u.id, u.username, u.role, u.person_id AS personId, u.must_change_password AS mustChangePassword, u.leave_admin AS leaveAdmin, u.supervisor,
                 u.created_at AS createdAt, p.name AS personName
          FROM users u LEFT JOIN people p ON p.id = u.person_id ORDER BY u.role, u.username`,
       )
       .all()
-      .map((u) => ({ ...u, mustChangePassword: !!u.mustChangePassword, leaveAdmin: !!u.leaveAdmin }));
+      .map((u) => ({ ...u, mustChangePassword: !!u.mustChangePassword, leaveAdmin: !!u.leaveAdmin, supervisor: !!u.supervisor }));
     res.json({ users });
   });
   const userFields = (b) => {
@@ -730,8 +734,8 @@ export function createApp(db, config = {}) {
         () =>
           Number(
             db
-              .prepare('INSERT INTO users (username, password_hash, role, person_id, must_change_password, leave_admin) VALUES (?,?,?,?,1,?)')
-              .run(username, hashPassword(req.body.password), role, personId, req.body.leaveAdmin ? 1 : 0).lastInsertRowid,
+              .prepare('INSERT INTO users (username, password_hash, role, person_id, must_change_password, leave_admin, supervisor) VALUES (?,?,?,?,1,?,?)')
+              .run(username, hashPassword(req.body.password), role, personId, req.body.leaveAdmin ? 1 : 0, req.body.supervisor ? 1 : 0).lastInsertRowid,
           ),
         'That username already exists',
       );
@@ -747,7 +751,9 @@ export function createApp(db, config = {}) {
       const id = Number(req.params.id);
       const { role, personId } = userFields(req.body || {});
       if (id === req.user.id && role !== 'admin') throw bad('You cannot remove your own admin role');
-      const r = db.prepare('UPDATE users SET role=?, person_id=?, leave_admin=? WHERE id=?').run(role, personId, req.body.leaveAdmin ? 1 : 0, id);
+      const r = db
+        .prepare('UPDATE users SET role=?, person_id=?, leave_admin=?, supervisor=? WHERE id=?')
+        .run(role, personId, req.body.leaveAdmin ? 1 : 0, req.body.supervisor ? 1 : 0, id);
       if (!r.changes) throw new HttpError(404, 'User not found');
       if (req.body.password) {
         const err = validatePassword(req.body.password);
@@ -755,7 +761,7 @@ export function createApp(db, config = {}) {
         db.prepare('UPDATE users SET password_hash=?, must_change_password=1 WHERE id=?').run(hashPassword(req.body.password), id);
         destroyUserSessions(db, id);
       }
-      audit(db, req.user, 'user.update', { id, role, personId, leaveAdmin: !!req.body.leaveAdmin, passwordReset: !!req.body.password });
+      audit(db, req.user, 'user.update', { id, role, personId, leaveAdmin: !!req.body.leaveAdmin, supervisor: !!req.body.supervisor, passwordReset: !!req.body.password });
       res.json({ ok: true });
     }),
   );
@@ -932,7 +938,7 @@ export function createApp(db, config = {}) {
     }),
   );
 
-  registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, broadcast, cfg });
+  registerLeaveRoutes(app, { db, staff, planner, json, wrap, HttpError, broadcast, cfg });
 
   // ---------------- Public holidays ----------------
   app.get('/api/public-holidays', staff, (req, res) => {
