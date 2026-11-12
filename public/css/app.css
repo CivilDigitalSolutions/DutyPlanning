@@ -1751,3 +1751,17 @@ td.hol-date {
     grid-column: auto;
   }
 }
+
+/* Weekend shading on the team count rows and the pinned "On duty" row: keep a solid
+   background and lay the tint on top, so cells scrolling underneath never show through. */
+.grid tfoot tr td.cnt.we {
+  background-color: var(--surface);
+  background-image: linear-gradient(var(--weekend), var(--weekend));
+}
+.grid tr.team-row td.cnt.we {
+  background-color: var(--primary-soft);
+  background-image: linear-gradient(var(--weekend), var(--weekend));
+}
+.grid tr.team-row td.cnt.we.lock {
+  background-image: linear-gradient(var(--lock-bg), var(--lock-bg)), linear-gradient(var(--weekend), var(--weekend));
+}
