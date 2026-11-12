@@ -78,6 +78,9 @@ self.addEventListener('fetch', (e) => {
 `,
 );
 fs.writeFileSync(path.join(pages, '.nojekyll'), '');
+// Excel reader/writer for imports and exports, served from the site itself (no third-party CDN).
+fs.mkdirSync(path.join(pages, 'vendor'), { recursive: true });
+fs.copyFileSync(path.join(root, 'node_modules/exceljs/dist/exceljs.min.js'), path.join(pages, 'vendor/exceljs.min.js'));
 fs.writeFileSync(
   path.join(pages, 'index.html'),
   `<!doctype html>
@@ -91,6 +94,7 @@ fs.writeFileSync(
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Duty Planning">
+<script>window.DP_DOWNLOADS = true; window.DP_EXCELJS_URL = 'vendor/exceljs.min.js';</script>
 ${html.replace('<div id="app">', '</head>\n<body>\n<div id="app">')}<script>
 if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 </script>

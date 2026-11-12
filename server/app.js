@@ -25,6 +25,7 @@ import { parseUserRows, templateCsv, ROLES } from './user-import.js';
 import { applyUserImport, userTemplateWorkbook } from './users-io.js';
 import { registerLeaveRoutes } from './leave.js';
 import { REGIONS, ukBankHolidays } from './holidays.js';
+import { buildIcs } from './ics.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const MAX_RANGE_DAYS = 400;
@@ -361,29 +362,10 @@ export function createApp(db, config = {}) {
     const to = addDays(from, 365);
     const codes = new Map(listCodes().map((c) => [c.code.toLowerCase(), c]));
     const rows = db.prepare('SELECT date, code, note FROM assignments WHERE person_id = ? AND date BETWEEN ? AND ? ORDER BY date').all(req.user.personId, from, to);
-    const esc = (t) => String(t).replace(/[\\;,]/g, (m) => '\\' + m).replace(/\n/g, '\\n');
-    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
-    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//DutyPlanning//EN', 'CALSCALE:GREGORIAN', `X-WR-CALNAME:${esc(cfg.orgName)} duties`];
-    for (const r of rows) {
-      const c = codes.get(r.code.toLowerCase());
-      if (c?.category === 'rest') continue;
-      const d = r.date.replace(/-/g, '');
-      lines.push(
-        'BEGIN:VEVENT',
-        `UID:${req.user.personId}-${d}@dutyplanning`,
-        `DTSTAMP:${stamp}`,
-        `DTSTART;VALUE=DATE:${d}`,
-        `DTEND;VALUE=DATE:${addDays(r.date, 1).replace(/-/g, '')}`,
-        `SUMMARY:${esc(c && c.label !== r.code ? `${r.code} - ${c.label}` : r.code)}`,
-        ...(r.note ? [`DESCRIPTION:${esc(r.note)}`] : []),
-        'TRANSP:TRANSPARENT',
-        'END:VEVENT',
-      );
-    }
-    lines.push('END:VCALENDAR');
+    const ics = buildIcs({ orgName: cfg.orgName, personId: req.user.personId, rows, info: (c) => codes.get(c.toLowerCase()) });
     res.set('Content-Type', 'text/calendar; charset=utf-8');
     res.set('Content-Disposition', 'attachment; filename="my-duties.ics"');
-    res.send(lines.join('\r\n') + '\r\n');
+    res.send(ics);
   });
 
   // Live updates

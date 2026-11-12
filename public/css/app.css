@@ -1765,3 +1765,15 @@ td.hol-date {
 .grid tr.team-row td.cnt.we.lock {
   background-image: linear-gradient(var(--lock-bg), var(--lock-bg)), linear-gradient(var(--weekend), var(--weekend));
 }
+/* Bank holiday date headers are pinned too: solid background with the holiday tint on top. */
+.grid thead tr th.d.ph {
+  background-color: var(--surface);
+  background-image: linear-gradient(var(--ph-bg), var(--ph-bg));
+}
+.grid thead tr th.d.ph.td {
+  background-color: var(--today);
+  background-image: none;
+}
+.grid thead tr th.d.ph.td span {
+  color: #fff;
+}

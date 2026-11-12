@@ -123,7 +123,7 @@ npm test                   # API and spreadsheet parser tests
 npm run build:demo        # -> dist/duty-planning-demo.html
 ```
 
-This produces one self-contained HTML file that runs the whole app in the browser with sample data and no server. The API is swapped for an in-browser mock (`demo/mock-api.js`) that applies the same rules, and data is saved in that browser's local storage. Use it to share a preview. File downloads (Excel export, calendar file), live updates and offline caching are switched off in this build.
+This produces one self-contained HTML file that runs the whole app in the browser with sample data and no server, plus the GitHub Pages site in `dist/pages/`. The API is swapped for an in-browser mock (`demo/mock-api.js`) that applies the same rules, and data is saved in that browser's local storage. Live updates between users are switched off. The single HTML file can't download files (it's built for the Claude preview, which blocks downloads); the Pages site can.
 
 ### Demo on GitHub Pages (proof of concept)
 
@@ -133,7 +133,7 @@ This produces one self-contained HTML file that runs the whole app in the browse
 2. **Publish:** push, or run the *Deploy demo to GitHub Pages* workflow from the Actions tab.
 3. **Share the link:** `https://<owner>.github.io/<repository>/`, also shown on the workflow run.
 
-The demo runs entirely in the visitor's browser with sample teams; no server or real data is involved. Visitors pick Planner, Staff member or Admin on the sign-in screen. Their changes stay in their own browser, and the account menu has *Reset demo data*. It can be added to a phone's home screen and opens offline after the first visit. File downloads (Excel export, calendar file) are switched off in the demo.
+The demo runs entirely in the visitor's browser with sample teams; no server or real data is involved. Visitors pick Planner, Staff member or Admin on the sign-in screen. Their changes stay in their own browser, and the account menu has *Reset demo data*. It can be added to a phone's home screen and opens offline after the first visit. Downloads work: the Excel plan export, the new-users template (Excel and CSV) and the personal calendar file are built in the browser, using a copy of the Excel library served from the site itself. (The Claude artifact preview blocks downloads, so there these buttons explain what they would download instead.)
 
 Things to know:
 - **The site is public** and readable by anyone with the link, even from a private repository. Only GitHub Enterprise Cloud can restrict Pages access. It's marked `noindex` so search engines shouldn't list it.

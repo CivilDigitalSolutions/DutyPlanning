@@ -2,6 +2,7 @@
 import ExcelJS from 'exceljs';
 import { tx, audit } from './db.js';
 import { cellValue, parseCsv, guessCategory, colorFor } from './sheet-parse.js';
+import { buildPlanWorkbook } from './workbooks.js';
 
 export { cellValue, headerDate, parseCsv, parseGrid, initialsOf } from './sheet-parse.js';
 
@@ -123,58 +124,12 @@ export async function exportWorkbook(db, { from, to, teamIds }) {
   const teams = db.prepare('SELECT * FROM teams ORDER BY sort_order, name').all().filter((t) => !teamIds?.length || teamIds.includes(t.id));
   const accs = db.prepare('SELECT * FROM accreditations ORDER BY sort_order, name').all();
   const codes = new Map(db.prepare('SELECT * FROM duty_codes').all().map((c) => [c.code.toLowerCase(), c]));
-  const people = db.prepare('SELECT * FROM people WHERE active = 1 ORDER BY sort_order, name').all();
-  const pacc = db.prepare('SELECT * FROM person_accreditations').all();
-  const asg = db.prepare('SELECT person_id, date, code FROM assignments WHERE date BETWEEN ? AND ?').all(from, to);
+  const people = db
+    .prepare('SELECT id, staff_number AS staffNumber, name, initials, mobile, team_id AS teamId FROM people WHERE active = 1 ORDER BY sort_order, name')
+    .all();
   const accMap = new Map();
-  for (const a of pacc) accMap.set(`${a.person_id}:${a.accreditation_id}`, a.expires ?? a.value);
+  for (const a of db.prepare('SELECT * FROM person_accreditations').all()) accMap.set(`${a.person_id}:${a.accreditation_id}`, a.expires ?? a.value);
   const asgMap = new Map();
-  for (const a of asg) asgMap.set(`${a.person_id}:${a.date}`, a.code);
-
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'Duty Planning';
-  const ws = wb.addWorksheet('Duty Plan', { views: [{ state: 'frozen', xSplit: 5 + accs.length, ySplit: 1 }] });
-  const fixed = ['Staff No', 'Name', 'Initials', 'Mobile', 'Team', ...accs.map((a) => a.code)];
-  ws.addRow([...fixed, ...dates.map((d) => new Date(d + 'T00:00:00Z'))]);
-  const head = ws.getRow(1);
-  head.font = { bold: true };
-  dates.forEach((_, i) => {
-    const cell = head.getCell(fixed.length + i + 1);
-    cell.numFmt = 'ddd dd/mm/yy';
-    cell.alignment = { textRotation: 90, horizontal: 'center' };
-  });
-  ws.columns.forEach((col, i) => (col.width = i < fixed.length ? [10, 24, 8, 14, 12][i] ?? 8 : 5));
-
-  const argb = (hex) => 'FF' + String(hex || '#ffffff').replace('#', '').toUpperCase();
-  for (const t of teams) {
-    const members = people.filter((p) => p.team_id === t.id);
-    for (const p of members) {
-      const row = ws.addRow([
-        p.staff_number,
-        p.name,
-        p.initials,
-        p.mobile,
-        t.name,
-        ...accs.map((a) => accMap.get(`${p.id}:${a.id}`) ?? null),
-        ...dates.map((d) => asgMap.get(`${p.id}:${d}`) ?? null),
-      ]);
-      dates.forEach((d, i) => {
-        const code = asgMap.get(`${p.id}:${d}`);
-        if (code) {
-          const cell = row.getCell(fixed.length + i + 1);
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(codes.get(code.toLowerCase())?.color) } };
-          cell.alignment = { horizontal: 'center' };
-        }
-      });
-    }
-    for (let v = members.length; v < t.establishment; v++) {
-      const row = ws.addRow([null, 'VACANT', null, null, t.name]);
-      row.font = { italic: true, color: { argb: 'FF888888' } };
-    }
-  }
-  const unassigned = people.filter((p) => !p.team_id || !teams.some((t) => t.id === p.team_id));
-  if (!teamIds?.length)
-    for (const p of unassigned.filter((p) => !p.team_id))
-      ws.addRow([p.staff_number, p.name, p.initials, p.mobile, null, ...accs.map((a) => accMap.get(`${p.id}:${a.id}`) ?? null), ...dates.map((d) => asgMap.get(`${p.id}:${d}`) ?? null)]);
-  return wb.xlsx.writeBuffer();
+  for (const a of db.prepare('SELECT person_id, date, code FROM assignments WHERE date BETWEEN ? AND ?').all(from, to)) asgMap.set(`${a.person_id}:${a.date}`, a.code);
+  return buildPlanWorkbook(ExcelJS, { dates, teams, accs, people, accMap, asgMap, colorOf: (c) => codes.get(c.toLowerCase())?.color, teamIds });
 }

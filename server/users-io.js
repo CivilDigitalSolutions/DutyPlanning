@@ -2,85 +2,15 @@
 import ExcelJS from 'exceljs';
 import { tx, audit } from './db.js';
 import { hashPassword } from './auth.js';
-import { USER_COLUMNS, ROLES, accreditationColumns, generatePassword } from './user-import.js';
+import { generatePassword } from './user-import.js';
+import { buildUserTemplate } from './workbooks.js';
 
-const ROWS_WITH_VALIDATION = 1000;
 
 /** Build the .xlsx template: a "New users" sheet with dropdowns, plus instructions. */
 export async function userTemplateWorkbook(db) {
   const teams = db.prepare('SELECT name FROM teams ORDER BY sort_order, name').all().map((t) => t.name);
   const accs = db.prepare('SELECT id, code, name FROM accreditations ORDER BY sort_order, name').all();
-  const cols = [...USER_COLUMNS, ...accreditationColumns(accs)];
-  const letter = (i) => {
-    let s = '';
-    for (i++; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s;
-    return s;
-  };
-
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'Duty Planning';
-  const ws = wb.addWorksheet('New users', { views: [{ state: 'frozen', ySplit: 1 }] });
-  ws.columns = cols.map((c) => ({ header: c.header + (c.required ? ' *' : ''), key: c.key, width: c.width }));
-  const head = ws.getRow(1);
-  head.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  head.height = 22;
-  head.alignment = { vertical: 'middle' };
-  cols.forEach((c, i) => {
-    const cell = head.getCell(i + 1);
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: c.required ? 'FF9B2C2C' : c.acc ? 'FF4A6A85' : 'FF1F4E79' } };
-    cell.note = c.desc;
-  });
-
-  // Lists for dropdowns live on a hidden sheet (avoids Excel's 255 character limit).
-  const lists = wb.addWorksheet('Lists', { state: 'veryHidden' });
-  ROLES.forEach((r, i) => (lists.getCell(i + 1, 1).value = r));
-  teams.forEach((t, i) => (lists.getCell(i + 1, 2).value = t));
-
-  const idx = Object.fromEntries(cols.map((c, i) => [c.key, i]));
-  for (let r = 2; r <= ROWS_WITH_VALIDATION + 1; r++) {
-    ws.getCell(`${letter(idx.email)}${r}`).dataValidation = {
-      type: 'custom',
-      allowBlank: true,
-      formulae: [`ISNUMBER(SEARCH("@",${letter(idx.email)}${r}))`],
-      showErrorMessage: true,
-      errorTitle: 'Email',
-      error: 'Enter a valid email address',
-    };
-    ws.getCell(`${letter(idx.role)}${r}`).dataValidation = { type: 'list', allowBlank: true, formulae: [`Lists!$A$1:$A$${ROLES.length}`], showErrorMessage: true, error: 'Choose staff, planner or admin' };
-    if (teams.length)
-      ws.getCell(`${letter(idx.team)}${r}`).dataValidation = {
-        type: 'list',
-        allowBlank: true,
-        formulae: [`Lists!$B$1:$B$${teams.length}`],
-        showErrorMessage: false, // allow new team names when "create missing teams" is used
-      };
-    ws.getCell(`${letter(idx.startDate)}${r}`).numFmt = 'dd/mm/yyyy';
-    ws.getCell(`${letter(idx.staffNumber)}${r}`).numFmt = '@';
-    ws.getCell(`${letter(idx.mobile)}${r}`).numFmt = '@';
-  }
-
-  const info = wb.addWorksheet('Instructions');
-  info.columns = [
-    { header: 'Column', key: 'h', width: 20 },
-    { header: 'Required', key: 'r', width: 10 },
-    { header: 'What to enter', key: 'd', width: 80 },
-    { header: 'Example', key: 'e', width: 24 },
-  ];
-  info.getRow(1).font = { bold: true };
-  for (const c of cols) info.addRow({ h: c.header, r: c.required ? 'Yes' : c.key === 'firstName' || c.key === 'name' ? 'Name' : '', d: c.desc, e: c.example });
-  info.addRow({});
-  for (const line of [
-    'Fill in one row per person on the "New users" sheet, starting on row 2. Do not change the header row.',
-    'Each person needs an Email and a name (First + Last name, or Full name). Everything else is optional.',
-    'Teams: pick from the list. New team names are only accepted if "Create missing teams" is ticked when importing.',
-    'Accreditation columns: enter Y if held, or the expiry date. Leave blank if not held.',
-    'People whose email already has an account are updated (details only - passwords are not changed).',
-    'Everyone gets a temporary password and must choose their own at first sign-in.',
-    'Save as .xlsx (or .csv) and upload it under Manage > User accounts > Import users.',
-  ])
-    info.addRow({ h: line }).getCell(1).alignment = { wrapText: false };
-  info.getColumn(3).alignment = { wrapText: true, vertical: 'top' };
-  return wb.xlsx.writeBuffer();
+  return buildUserTemplate(ExcelJS, { teams, accs });
 }
 
 /**

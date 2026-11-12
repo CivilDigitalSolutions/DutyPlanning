@@ -8,7 +8,9 @@ import { seedDemo } from './seed.js';
 import { REGIONS, ukBankHolidays } from '../server/holidays.js';
 import { parseUserRows, generatePassword, templateCsv, ROLES } from '../server/user-import.js';
 import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, validateRequestDates, lockdownsFor, canRosterLockdown } from '../server/leave-rules.js';
-import { dialog, html, todayIso } from '../public/js/util.js';
+import { dialog, html, todayIso, toast, addDays } from '../public/js/util.js';
+import { buildPlanWorkbook, buildUserTemplate } from '../server/workbooks.js';
+import { buildIcs } from '../server/ics.js';
 
 const KEY = 'dp-demo-v7';
 const RANK = { staff: 1, planner: 2, admin: 3 };
@@ -552,7 +554,8 @@ function loadExcel() {
   if (window.ExcelJS) return Promise.resolve(window.ExcelJS);
   excelLoading ??= new Promise((resolve, reject) => {
     const el = document.createElement('script');
-    el.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    // The GitHub Pages build ships its own copy; the Claude artifact preview loads it from cdnjs.
+    el.src = window.DP_EXCELJS_URL || 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
     el.onload = () => resolve(window.ExcelJS);
     el.onerror = () => {
       excelLoading = null;
@@ -1065,7 +1068,69 @@ export const post = (p, body) => api(p, { method: 'POST', body: body ?? {} });
 export const put = (p, body) => api(p, { method: 'PUT', body });
 export const del = (p) => api(p, { method: 'DELETE' });
 
+// Builds the file in the browser and saves it. Used where the page may download files
+// (the GitHub Pages demo sets window.DP_DOWNLOADS); the Claude artifact preview blocks downloads.
+function saveFile(name, data, type) {
+  const blob = data instanceof Blob ? data : new Blob([data], { type });
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+async function buildDownload(path) {
+  const url = new URL(path, 'http://demo');
+  const q = Object.fromEntries(url.searchParams);
+  if (url.pathname === '/export.xlsx') {
+    need('planner');
+    const { from, to } = readRange(q);
+    const teamIds = q.teams ? q.teams.split(',').map(Number) : null;
+    const accMap = new Map();
+    for (const [pid, rec] of Object.entries(db.pacc)) for (const [aid, v] of Object.entries(rec)) accMap.set(`${pid}:${aid}`, v.e ?? v.v);
+    const asgMap = new Map();
+    const dates = eachDate(from, to);
+    for (const p of db.people) for (const d of dates) if (db.asg[`${p.id}|${d}`]) asgMap.set(`${p.id}:${d}`, db.asg[`${p.id}|${d}`].c);
+    const buf = await buildPlanWorkbook(await loadExcel(), {
+      dates,
+      teams: listTeams().filter((t) => !teamIds?.length || teamIds.includes(t.id)),
+      accs: listAccs(),
+      people: sortBy(db.people.filter((p) => p.active), 'sortOrder', 'name'),
+      accMap,
+      asgMap,
+      colorOf: (c) => findCode(c)?.color,
+      teamIds,
+    });
+    return saveFile(`duty-plan-${from}-to-${to}.xlsx`, new Blob([buf], { type: XLSX }));
+  }
+  if (url.pathname === '/users/template.xlsx') {
+    need('admin');
+    const buf = await buildUserTemplate(await loadExcel(), { teams: listTeams().map((t) => t.name), accs: listAccs() });
+    return saveFile('new-users-template.xlsx', new Blob([buf], { type: XLSX }));
+  }
+  if (url.pathname === '/users/template.csv') {
+    need('admin');
+    return saveFile('new-users-template.csv', '\uFEFF' + templateCsv(listAccs()), 'text/csv;charset=utf-8');
+  }
+  if (url.pathname === '/my.ics') {
+    const u = need('staff');
+    if (!u.personId) bad('Your account is not linked to a person on the plan');
+    const from = todayIso();
+    const rows = eachDate(from, addDays(from, 365))
+      .filter((d) => db.asg[`${u.personId}|${d}`])
+      .map((d) => ({ date: d, code: db.asg[`${u.personId}|${d}`].c, note: db.asg[`${u.personId}|${d}`].n }));
+    return saveFile('my-duties.ics', buildIcs({ orgName: db.orgName, personId: u.personId, rows, info: (c) => findCode(c) }), 'text/calendar;charset=utf-8');
+  }
+  fail(404, 'Not found');
+}
+
 export function download(path) {
+  if (window.DP_DOWNLOADS) {
+    buildDownload(path).catch((e) => toast(e.message, 'error'));
+    return;
+  }
   if (path.startsWith('/users/template')) {
     // Downloads are blocked here, so show the template's columns to copy instead.
     const csv = templateCsv(listAccs());
