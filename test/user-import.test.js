@@ -135,13 +135,13 @@ test('the downloaded Excel template can be filled in and uploaded as-is', async 
   assert.ok(await session('from.template@org.test', 'Welcome2026'));
 });
 
-test('import sets line managers (including ones in the same file) and leave allowance', async () => {
+test('import sets line managers, including ones in the same file', async () => {
   const admin = await session('admin');
   const csv = [
-    'Email,Full name,Line manager email,Leave allowance',
-    'report@org.test,Rae Report,boss@org.test,27.5',
-    'boss@org.test,Bo Boss,,30',
-    'other@org.test,Oli Other,nobody@org.test,',
+    'Email,Full name,Line manager email',
+    'report@org.test,Rae Report,boss@org.test',
+    'boss@org.test,Bo Boss,',
+    'other@org.test,Oli Other,nobody@org.test',
   ].join('\n');
   const dry = await admin('/users/import?dryRun=1', { method: 'POST', body: csv });
   assert.ok(dry.body.preview.warnings.some((w) => /nobody@org.test/.test(w)));
@@ -150,6 +150,5 @@ test('import sets line managers (including ones in the same file) and leave allo
   const rep = db.prepare("SELECT * FROM people WHERE email = 'report@org.test'").get();
   const boss = db.prepare("SELECT * FROM people WHERE email = 'boss@org.test'").get();
   assert.equal(rep.line_manager_id, boss.id);
-  assert.equal(rep.leave_allowance, 27.5);
   assert.deepEqual(r.body.summary.managersNotFound, ['nobody@org.test']);
 });

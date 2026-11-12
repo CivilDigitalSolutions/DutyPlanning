@@ -19,7 +19,6 @@ export const USER_COLUMNS = [
   { key: 'jobTitle', header: 'Job title', width: 18, example: 'Officer', desc: 'Rank, grade or job title.', re: /^(job\s*title|title|rank|grade|post|position\s*title)$/i },
   { key: 'startDate', header: 'Start date', width: 12, example: '01/04/2026', desc: 'Date they joined, as dd/mm/yyyy.', re: /^(start(\s*date)?|date\s*(joined|started)|joined)$/i },
   { key: 'lineManagerEmail', header: 'Line manager email', width: 30, example: 'jo.manager@yourorg.org', desc: 'Email of the person who approves their leave. They can be in this file or already in the app.', re: /^(line\s*)?manager(\s*e-?mail)?$|^(line\s*)?manager'?s?\s*e-?mail$|^reports\s*to$/i },
-  { key: 'leaveAllowance', header: 'Leave allowance', width: 12, example: '25', desc: 'Annual leave allowance in days for the leave year.', re: /^(annual\s*)?leave(\s*allowance|\s*entitlement|\s*days)?$|^allowance$|^entitlement$/i },
   { key: 'role', header: 'App role', width: 10, example: 'staff', desc: 'What they can do in the app: staff (view only, the default), planner (edit the plan) or admin (also manage accounts).', re: /^((app|system|access|user)\s*)?role$|^access(\s*level)?$|^permissions?$/i },
 ];
 
@@ -106,14 +105,6 @@ export function parseUserRows(rows, { teams, accreditations, dateOrder = 'dmy' }
     const lineManagerEmail = get('lineManagerEmail').toLowerCase();
     if (lineManagerEmail && !EMAIL.test(lineManagerEmail)) errors.push(`Line manager email "${lineManagerEmail}" is not a valid email address`);
     if (lineManagerEmail && lineManagerEmail === email) errors.push('Someone cannot be their own line manager');
-    let leaveAllowance = null;
-    if (get('leaveAllowance')) {
-      leaveAllowance = Number(get('leaveAllowance'));
-      if (!(leaveAllowance >= 0 && leaveAllowance <= 400)) {
-        errors.push('Leave allowance must be a number of days (0-400)');
-        leaveAllowance = null;
-      }
-    }
 
     const acc = {};
     for (const d of accCols) {
@@ -142,7 +133,6 @@ export function parseUserRows(rows, { teams, accreditations, dateOrder = 'dmy' }
       startDate,
       role,
       lineManagerEmail,
-      leaveAllowance,
       acc,
       errors,
     });

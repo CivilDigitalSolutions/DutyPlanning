@@ -7,10 +7,10 @@ import { daysBetween, eachDate, isValidIso } from '../server/dates.js';
 import { seedDemo } from './seed.js';
 import { REGIONS, ukBankHolidays } from '../server/holidays.js';
 import { parseUserRows, generatePassword, templateCsv, ROLES } from '../server/user-import.js';
-import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, leaveYear, validateRequestDates } from '../server/leave-rules.js';
+import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, validateRequestDates } from '../server/leave-rules.js';
 import { dialog, html, todayIso } from '../public/js/util.js';
 
-const KEY = 'dp-demo-v3';
+const KEY = 'dp-demo-v4';
 const RANK = { staff: 1, planner: 2, admin: 3 };
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -309,12 +309,6 @@ const checkManager = (v, selfId) => {
   if (mid != null && mid === selfId) bad('Someone cannot be their own line manager');
   return mid;
 };
-const allowance = (v) => {
-  if (v == null || v === '') return null;
-  const n = Number(v);
-  if (!(n >= 0 && n <= 400)) bad('Leave allowance must be between 0 and 400 days');
-  return n;
-};
 const personBody = (b, selfId = null) => {
   const staffNumber = s(b.staffNumber, 50);
   const name = s(b.name, 150);
@@ -340,7 +334,6 @@ const personBody = (b, selfId = null) => {
     jobTitle: s(b.jobTitle, 100) || null,
     startDate,
     lineManagerId: checkManager(b.lineManagerId, selfId),
-    leaveAllowance: allowance(b.leaveAllowance),
   };
 };
 on('POST', '/people', ({ body }) => {
@@ -730,7 +723,6 @@ on('POST', '/users/import', async ({ body, query, headers }) => {
       if (r.jobTitle) person.jobTitle = r.jobTitle;
       if (r.startDate) person.startDate = r.startDate;
       if (r.staffNumber) person.staffNumber = r.staffNumber;
-      if (r.leaveAllowance != null) person.leaveAllowance = r.leaveAllowance;
       summary.updated++;
     } else {
       let staffNumber = r.staffNumber;
@@ -738,7 +730,7 @@ on('POST', '/users/import', async ({ body, query, headers }) => {
         const sn = 'U' + String(n).padStart(5, '0');
         if (!byStaff(sn)) staffNumber = sn;
       }
-      db.people.push((person = { id: nextId(), staffNumber, ...fields, mobile: r.mobile || null, jobTitle: r.jobTitle || null, startDate: r.startDate, leaveAllowance: r.leaveAllowance }));
+      db.people.push((person = { id: nextId(), staffNumber, ...fields, mobile: r.mobile || null, jobTitle: r.jobTitle || null, startDate: r.startDate }));
       summary.created++;
     }
     const rec = (db.pacc[person.id] ??= {});
@@ -829,19 +821,8 @@ function targetPerson(u, personId) {
   return id;
 }
 
-on('GET', '/leave/summary', ({ query }) => {
+on('GET', '/leave/summary', () => {
   const u = need('staff');
-  const year = leaveYear(isValidIso(query.date) ? query.date : todayIso());
-  let mine = null;
-  if (u.personId) {
-    const rows = db.leave.filter((r) => r.personId === u.personId && r.start >= year.from && r.start <= year.to && ACTIVE_STATUSES.includes(r.status));
-    const sum = (f) => rows.filter(f).reduce((n, r) => n + r.days, 0);
-    mine = {
-      allowance: db.people.find((p) => p.id === u.personId)?.leaveAllowance ?? null,
-      booked: sum((r) => r.status !== 'pending'),
-      pending: sum((r) => r.status === 'pending'),
-    };
-  }
   const toApprove = db.leave.filter((r) => {
     if (r.status !== 'pending' || r.personId === u.personId) return false;
     const mgr = db.people.find((p) => p.id === r.personId)?.lineManagerId ?? null;
@@ -849,7 +830,7 @@ on('GET', '/leave/summary', ({ query }) => {
   }).length;
   const toApply = administers(u) ? db.leave.filter((r) => r.status === 'approved' || r.status === 'cancel_requested').length : 0;
   const isManager = !!u.personId && db.people.some((p) => p.lineManagerId === u.personId);
-  return { year, mine, toApprove, toApply, isManager, administers: administers(u), leaveTypes: leaveTypes() };
+  return { toApprove, toApply, isManager, administers: administers(u), leaveTypes: leaveTypes() };
 });
 
 on('GET', '/leave', ({ query }) => {

@@ -1518,9 +1518,6 @@ code {
 .status-cancelled {
   color: var(--muted);
 }
-.stat-bad b {
-  color: var(--danger);
-}
 .empty-inline {
   color: var(--muted);
   padding: 16px;

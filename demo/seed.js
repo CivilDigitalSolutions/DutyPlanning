@@ -81,7 +81,6 @@ export function seedDemo(today) {
     const members = db.people.filter((p) => p.teamId === t.id).sort((a, b) => a.sortOrder - b.sortOrder);
     for (const m of members.slice(1)) m.lineManagerId = members[0].id;
   }
-  for (const p of db.people) p.leaveAllowance = 25;
   db.users = [
     { id: nextId(), username: 'admin', password: 'admin1234', role: 'admin', personId: null, mustChangePassword: false },
     { id: nextId(), username: 'planner', password: 'planner1234', role: 'planner', personId: pidOf('1002'), mustChangePassword: false, leaveAdmin: true },

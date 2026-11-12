@@ -149,16 +149,16 @@ export function applyUserImport(db, parsed, { createTeams = true, updateExisting
         pid = person.id;
         db.prepare(
           `UPDATE people SET email=?, name=?, initials=?, mobile=COALESCE(?, mobile), team_id=?, sort_order=?, job_title=COALESCE(?, job_title),
-             start_date=COALESCE(?, start_date), staff_number=COALESCE(?, staff_number), leave_allowance=COALESCE(?, leave_allowance), active=1 WHERE id=?`,
-        ).run(row.email, row.name, row.initials || null, row.mobile || null, teamId, position, row.jobTitle || null, row.startDate, row.staffNumber || null, row.leaveAllowance, pid);
+             start_date=COALESCE(?, start_date), staff_number=COALESCE(?, staff_number), active=1 WHERE id=?`,
+        ).run(row.email, row.name, row.initials || null, row.mobile || null, teamId, position, row.jobTitle || null, row.startDate, row.staffNumber || null, pid);
         summary.updated++;
       } else {
         pid = Number(
           db
             .prepare(
-              'INSERT INTO people (staff_number, name, initials, mobile, team_id, sort_order, email, job_title, start_date, leave_allowance, active) VALUES (?,?,?,?,?,?,?,?,?,?,1)',
+              'INSERT INTO people (staff_number, name, initials, mobile, team_id, sort_order, email, job_title, start_date, active) VALUES (?,?,?,?,?,?,?,?,?,1)',
             )
-            .run(row.staffNumber || nextStaffNo(), row.name, row.initials || null, row.mobile || null, teamId, position, row.email, row.jobTitle || null, row.startDate, row.leaveAllowance)
+            .run(row.staffNumber || nextStaffNo(), row.name, row.initials || null, row.mobile || null, teamId, position, row.email, row.jobTitle || null, row.startDate)
             .lastInsertRowid,
         );
         summary.created++;

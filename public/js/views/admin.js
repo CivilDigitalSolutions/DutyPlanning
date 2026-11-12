@@ -121,7 +121,6 @@ async function people(body, params) {
         <label>Line manager<select name="lineManagerId"><option value="">None</option>${list
           .filter((x) => x.active && x.id !== p?.id)
           .map((x) => html`<option value="${x.id}" ${p?.lineManagerId === x.id ? 'selected' : ''}>${x.name} (${x.staffNumber})</option>`)}</select></label>
-        <label>Annual leave allowance (days)<input name="leaveAllowance" type="number" min="0" max="400" step="0.5" value="${p?.leaveAllowance ?? ''}" placeholder="Not set" /></label>
         <label>Team<select name="teamId"><option value="">No team</option>${state.meta.teams.map((t) => html`<option value="${t.id}" ${p?.teamId === t.id ? 'selected' : ''}>${t.name}</option>`)}</select></label>
         <label>Position in team<input name="sortOrder" type="number" value="${p?.sortOrder ?? 0}" /></label>
         <label class="check span2"><input type="checkbox" name="active" ${!p || p.active ? 'checked' : ''} /> Active (shown on the plan)</label>
@@ -309,7 +308,7 @@ async function holidays(body) {
   body.innerHTML = html`
     <div class="toolbar"><h2>Public holidays</h2><span class="spacer"></span><button class="btn btn-primary" data-act="add">Add a date</button></div>
     <p class="muted">Public holidays are highlighted on the plan. When annual leave covers one, it goes on the roster as <b>Public holiday - AL</b> (PH-AL)
-      and is not counted against the person's allowance.</p>
+      and is not counted as a working day of leave.</p>
     <form class="card gen-form">
       <strong>Add UK bank holidays</strong>
       <label>Year<select name="year">${[year - 1, year, year + 1, year + 2].map((y) => html`<option ${y === year + (list.some((h) => h.date.startsWith(String(year))) ? 1 : 0) ? 'selected' : ''}>${y}</option>`)}</select></label>

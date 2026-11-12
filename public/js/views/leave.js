@@ -260,7 +260,7 @@ function requestDialog(sum, refresh) {
       const p = await get(`/leave/preview?start=${f.start.value}&end=${f.end.value}`);
       const manager = state.user.person?.lineManagerId;
       box.innerHTML = html`
-        <p><b>${plural(p.workingDays, 'working day')}</b> will come off your allowance${sum.mine?.allowance != null ? html` (${Math.max(0, sum.mine.allowance - sum.mine.booked - sum.mine.pending)} left this leave year before this request)` : ''}.</p>
+        <p>This covers <b>${plural(p.workingDays, 'working day')}</b> on your roster.</p>
         <div class="mini-days">${p.days.map((x) => html`<div class="mini-day ${x.working ? '' : 'off'} ${x.publicHoliday ? 'ph' : ''}" title="${x.publicHoliday || ''}"><small>${x.publicHoliday ? 'Hol' : fmtDate(x.date, 'dow')}</small><b>${dayNum(x.date)}</b>${chip(x.code)}</div>`)}</div>
         ${p.days.some((x) => x.publicHoliday)
           ? html`<p class="small">Public holidays in this period (not counted): ${p.days.filter((x) => x.publicHoliday).map((x) => `${fmtDate(x.date, 'dm')} ${x.publicHoliday}`).join(', ')}.</p>`
@@ -290,20 +290,11 @@ function requestDialog(sum, refresh) {
 
 // ---------- tabs ----------
 async function mine(body, sum, refresh) {
-  const [{ requests }, fresh] = await Promise.all([get('/leave?scope=mine'), get('/leave/summary')]);
-  Object.assign(sum, fresh);
-  const m = sum.mine || {};
-  const left = m.allowance != null ? m.allowance - m.booked - m.pending : null;
+  const { requests } = await get('/leave?scope=mine');
   const upcoming = requests.filter((r) => r.end >= todayIso() && !['rejected', 'cancelled'].includes(r.status));
   const past = requests.filter((r) => !upcoming.includes(r));
   body.innerHTML = html`
     <div class="toolbar"><h2>My leave</h2><span class="spacer"></span><button class="btn btn-primary" data-act="new">Request leave</button></div>
-    <div class="stats">
-      <div class="stat"><small>Allowance ${fmtDate(sum.year.from, 'dm')} – ${fmtDate(sum.year.to, 'dmy')}</small><b>${m.allowance != null ? plural(m.allowance, 'day') : 'Not set'}</b></div>
-      <div class="stat"><small>Booked</small><b>${plural(m.booked || 0, 'day')}</b></div>
-      <div class="stat"><small>Awaiting approval</small><b>${plural(m.pending || 0, 'day')}</b></div>
-      ${left != null ? html`<div class="stat ${left < 0 ? 'stat-bad' : ''}"><small>Left to book</small><b>${plural(left, 'day')}</b></div>` : ''}
-    </div>
     <h3>Current and upcoming</h3>
     ${upcoming.length ? html`<ul class="req-list" data-list="up">${upcoming.map((r) => requestCard(r, { showPerson: false }))}</ul>` : html`<p class="muted">No leave booked. Use <b>Request leave</b> to ask for time off.</p>`}
     ${past.length ? html`<details><summary>Past, cancelled and rejected (${past.length})</summary><ul class="req-list" data-list="past">${past.map((r) => requestCard(r, { showPerson: false }))}</ul></details>` : ''}`;

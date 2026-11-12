@@ -1,12 +1,11 @@
 // Annual leave requests: request -> line manager approval -> leave administrator applies to roster.
 import { tx, audit } from './db.js';
 import { daysBetween, eachDate, isValidIso } from './dates.js';
-import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, leaveYear, validateRequestDates } from './leave-rules.js';
+import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, validateRequestDates } from './leave-rules.js';
 
 export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, broadcast, cfg }) {
   const bad = (m) => new HttpError(400, m);
   const s = (v, max) => (v == null ? '' : String(v).trim().slice(0, max));
-  const today = () => new Date().toISOString().slice(0, 10);
   const viewerOf = (u) => ({ personId: u.personId, role: u.role, leaveAdmin: u.leaveAdmin });
   const administers = (u) => u.role === 'admin' || u.leaveAdmin;
 
@@ -79,22 +78,7 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
     return id;
   }
 
-  function summary(u, date) {
-    // Leave year containing `date` (default today), so next year's bookings can be checked too.
-    const year = leaveYear(isValidIso(date) ? date : today(), cfg.leaveYearStart);
-    let mine = null;
-    if (u.personId) {
-      const p = db.prepare('SELECT leave_allowance AS allowance FROM people WHERE id = ?').get(u.personId);
-      const rows = db
-        .prepare(`SELECT status, days FROM leave_requests WHERE person_id = ? AND start_date BETWEEN ? AND ? AND status IN (${ACTIVE_STATUSES.map(() => '?').join(',')})`)
-        .all(u.personId, year.from, year.to, ...ACTIVE_STATUSES);
-      const sum = (f) => rows.filter(f).reduce((n, r) => n + r.days, 0);
-      mine = {
-        allowance: p?.allowance ?? null,
-        booked: sum((r) => r.status === 'applied' || r.status === 'cancel_requested' || r.status === 'approved'),
-        pending: sum((r) => r.status === 'pending'),
-      };
-    }
+  function summary(u) {
     const toApprove = db
       .prepare(
         `SELECT COUNT(*) AS n FROM leave_requests r JOIN people p ON p.id = r.person_id
@@ -103,10 +87,10 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
       .get(u.personId ?? -1, u.personId ?? -1).n;
     const toApply = administers(u) ? db.prepare("SELECT COUNT(*) AS n FROM leave_requests WHERE status IN ('approved','cancel_requested')").get().n : 0;
     const isManager = !!(u.personId && db.prepare('SELECT 1 FROM people WHERE line_manager_id = ? LIMIT 1').get(u.personId));
-    return { year, mine, toApprove, toApply, isManager, administers: administers(u), leaveTypes: leaveTypes() };
+    return { toApprove, toApply, isManager, administers: administers(u), leaveTypes: leaveTypes() };
   }
 
-  app.get('/api/leave/summary', staff, (req, res) => res.json(summary(req.user, req.query.date)));
+  app.get('/api/leave/summary', staff, (req, res) => res.json(summary(req.user)));
 
   // List requests. scope: mine | approve (my reports + stand-in approvals) | apply | all
   app.get('/api/leave', staff, (req, res) => {

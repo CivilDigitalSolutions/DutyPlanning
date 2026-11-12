@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../server/db.js';
 import { createApp } from '../server/app.js';
 import { hashPassword } from '../server/auth.js';
-import { leaveYear, leaveActions } from '../server/leave-rules.js';
+import { leaveActions } from '../server/leave-rules.js';
 
 let server, base, db;
 const pw = hashPassword('password123');
@@ -12,7 +12,7 @@ before(async () => {
   db = openDb(':memory:');
   db.prepare("INSERT INTO teams (id, name, establishment, min_strength) VALUES (1, 'Team 1', 4, 2)").run();
   db.prepare("INSERT INTO people (id, staff_number, name, team_id) VALUES (1, '1', 'Mary Manager', 1)").run();
-  db.prepare("INSERT INTO people (id, staff_number, name, team_id, line_manager_id, leave_allowance) VALUES (2, '2', 'Sam Staff', 1, 1, 25)").run();
+  db.prepare("INSERT INTO people (id, staff_number, name, team_id, line_manager_id) VALUES (2, '2', 'Sam Staff', 1, 1)").run();
   db.prepare("INSERT INTO people (id, staff_number, name, team_id, line_manager_id) VALUES (3, '3', 'Pat Peer', 1, 1)").run();
   db.prepare("INSERT INTO users (username, password_hash, role, person_id) VALUES ('mary', ?, 'staff', 1)").run(pw);
   db.prepare("INSERT INTO users (username, password_hash, role, person_id) VALUES ('sam', ?, 'staff', 2)").run(pw);
@@ -99,8 +99,7 @@ test('full workflow: request, approve, apply, cancel and restore', async () => {
   });
   const labels = Object.fromEntries(db.prepare("SELECT code, label FROM duty_codes WHERE code IN ('RD-AL','PH-AL')").all().map((c) => [c.code, c.label]));
   assert.deepEqual(labels, { 'RD-AL': 'Rest Day - AL', 'PH-AL': 'Public holiday - AL' });
-  const sum = (await sam('/leave/summary?date=2031-06-01')).body.mine;
-  assert.deepEqual(sum, { allowance: 25, booked: 4, pending: 0 });
+  assert.equal((await sam('/leave/summary')).body.mine, undefined, 'no allowance tracking');
 
   // A planner changes one leave day before cancellation; that day is left alone on restore.
   db.prepare("UPDATE assignments SET code = 'T2', note = NULL WHERE person_id = 2 AND date = '2031-03-09'").run();
@@ -139,8 +138,6 @@ test('rejecting needs a reason; cover warnings; people without a manager go to a
 });
 
 test('leave rules helpers', () => {
-  assert.deepEqual(leaveYear('2026-11-12'), { from: '2026-01-01', to: '2026-12-31' });
-  assert.deepEqual(leaveYear('2026-03-01', '04-01'), { from: '2025-04-01', to: '2026-03-31' });
   const a = leaveActions({ personId: 5, managerPersonId: null, status: 'pending' }, { personId: 9, role: 'staff', leaveAdmin: true });
   assert.equal(a.approve, true);
   assert.equal(leaveActions({ personId: 5, managerPersonId: 7, status: 'pending' }, { personId: 9, role: 'staff', leaveAdmin: true }).approve, false);

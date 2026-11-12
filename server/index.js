@@ -23,7 +23,6 @@ const app = createApp(db, {
   cookieSecure: env.COOKIE_SECURE ? env.COOKIE_SECURE === 'true' : env.NODE_ENV === 'production',
   trustProxy: env.TRUST_PROXY || (env.NODE_ENV === 'production' ? 'loopback, uniquelocal' : false),
   dateOrder: env.DATE_ORDER === 'mdy' ? 'mdy' : 'dmy',
-  leaveYearStart: /^\d{2}-\d{2}$/.test(env.LEAVE_YEAR_START || '') ? env.LEAVE_YEAR_START : '01-01',
 });
 
 const port = Number(env.PORT || 3000);

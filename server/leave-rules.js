@@ -70,9 +70,9 @@ const isWeekday = (iso) => {
  * @param teamOnDuty (date) => number of the person's team on a duty that day (including them)
  * @param minStrength team minimum or null
  * @param holidayAt (date) => public holiday name or null
- * A day counts against the allowance when the person is rostered to work it (duty or
+ * A day counts as a working day of leave when the person is rostered to work it (duty or
  * training), or - where nothing is planned yet - when it is a weekday. Public holidays
- * and rest days never count.
+ * and rest days are not counted.
  */
 export function leaveBreakdown({ dates, codeAt, info, teamOnDuty, minStrength, holidayAt }) {
   const days = dates.map((date) => {
@@ -105,17 +105,6 @@ export function leavePlan(days, code, hasCode) {
     else if (hasCode(`RD-${code}`)) out.push({ date: d.date, code: `RD-${code}` });
   }
   return out;
-}
-
-/** Current leave year, given its start as "MM-DD" (default 1 January). */
-export function leaveYear(today, start = '01-01') {
-  const [m, d] = start.split('-').map(Number);
-  const y = Number(today.slice(0, 4));
-  const mmdd = today.slice(5);
-  const startYear = mmdd >= start ? y : y - 1;
-  const from = `${startYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  const end = new Date(Date.UTC(startYear + 1, m - 1, d - 1));
-  return { from, to: end.toISOString().slice(0, 10) };
 }
 
 export function validateRequestDates(start, end, isValidIso, daysBetween) {

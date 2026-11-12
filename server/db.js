@@ -154,7 +154,6 @@ function migrate(db) {
   if (!cols.has('start_date')) db.exec('ALTER TABLE people ADD COLUMN start_date TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS people_email ON people(email COLLATE NOCASE) WHERE email IS NOT NULL');
   if (!cols.has('line_manager_id')) db.exec('ALTER TABLE people ADD COLUMN line_manager_id INTEGER REFERENCES people(id) ON DELETE SET NULL');
-  if (!cols.has('leave_allowance')) db.exec('ALTER TABLE people ADD COLUMN leave_allowance REAL');
   const ucols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
   if (!ucols.has('leave_admin')) db.exec('ALTER TABLE users ADD COLUMN leave_admin INTEGER NOT NULL DEFAULT 0');
 }

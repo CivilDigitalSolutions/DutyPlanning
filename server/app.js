@@ -48,7 +48,6 @@ export function createApp(db, config = {}) {
     mobileVisibility: 'team', // 'all' | 'team' | 'planners'
     cookieSecure: false,
     dateOrder: 'dmy',
-    leaveYearStart: '01-01',
     ...config,
   };
   const app = express();
@@ -450,7 +449,7 @@ export function createApp(db, config = {}) {
     const people = db
       .prepare(
         `SELECT p.id, p.staff_number AS staffNumber, p.name, p.initials, p.mobile, p.email, p.job_title AS jobTitle, p.start_date AS startDate,
-                p.line_manager_id AS lineManagerId, p.leave_allowance AS leaveAllowance,
+                p.line_manager_id AS lineManagerId,
                 p.team_id AS teamId, p.sort_order AS sortOrder, p.active,
                 (SELECT u.username FROM users u WHERE u.person_id = p.id LIMIT 1) AS username
          FROM people p LEFT JOIN teams t ON t.id = p.team_id
@@ -477,8 +476,6 @@ export function createApp(db, config = {}) {
     if (Number.isNaN(lineManagerId)) throw bad('Invalid line manager');
     if (lineManagerId != null && !db.prepare('SELECT 1 FROM people WHERE id = ?').get(lineManagerId)) throw bad('Line manager not found');
     if (lineManagerId != null && selfId != null && lineManagerId === selfId) throw bad('Someone cannot be their own line manager');
-    const leaveAllowance = b.leaveAllowance == null || b.leaveAllowance === '' ? null : Number(b.leaveAllowance);
-    if (leaveAllowance != null && !(leaveAllowance >= 0 && leaveAllowance <= 400)) throw bad('Leave allowance must be between 0 and 400 days');
     return [
       staffNumber,
       name,
@@ -491,7 +488,6 @@ export function createApp(db, config = {}) {
       s(b.jobTitle, 100) || null,
       startDate,
       lineManagerId,
-      leaveAllowance,
     ];
   };
   const uniqueGuard = (fn, msg) => {
@@ -512,7 +508,7 @@ export function createApp(db, config = {}) {
           Number(
             db
               .prepare(
-                'INSERT INTO people (staff_number,name,initials,mobile,team_id,sort_order,active,email,job_title,start_date,line_manager_id,leave_allowance) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                'INSERT INTO people (staff_number,name,initials,mobile,team_id,sort_order,active,email,job_title,start_date,line_manager_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
               )
               .run(...personBody(req.body || {})).lastInsertRowid,
           ),
@@ -532,7 +528,7 @@ export function createApp(db, config = {}) {
         () =>
           db
             .prepare(
-              'UPDATE people SET staff_number=?, name=?, initials=?, mobile=?, team_id=?, sort_order=?, active=?, email=?, job_title=?, start_date=?, line_manager_id=?, leave_allowance=? WHERE id=?',
+              'UPDATE people SET staff_number=?, name=?, initials=?, mobile=?, team_id=?, sort_order=?, active=?, email=?, job_title=?, start_date=?, line_manager_id=? WHERE id=?',
             )
             .run(...personBody(req.body || {}, Number(req.params.id)), Number(req.params.id)),
         'That staff number or email is already used by someone else',

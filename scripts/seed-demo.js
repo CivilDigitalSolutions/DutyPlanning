@@ -78,7 +78,6 @@ tx(db, () => {
     const lead = members[0]?.id;
     for (const m of members.slice(1)) db.prepare('UPDATE people SET line_manager_id = ? WHERE id = ?').run(lead, m.id);
   }
-  db.prepare('UPDATE people SET leave_allowance = 25').run();
 
   // Sample leave requests at each stage of the workflow.
   const pid = (sn) => db.prepare('SELECT id FROM people WHERE staff_number = ?').get(sn).id;
