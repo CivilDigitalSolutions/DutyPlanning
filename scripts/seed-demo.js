@@ -82,17 +82,21 @@ tx(db, () => {
   // Sample leave requests at each stage of the workflow.
   const pid = (sn) => db.prepare('SELECT id FROM people WHERE staff_number = ?').get(sn).id;
   const workDays = (p, a, b) => db.prepare("SELECT COUNT(*) AS n FROM assignments WHERE person_id = ? AND date BETWEEN ? AND ? AND code <> 'RD'").get(p, a, b).n;
-  const leave = (sn, startOffset, len, status, note) => {
+  const leave = (sn, startOffset, len, status, note, receivedDaysAgo = 3, receivedHour = 9) => {
     const p = pid(sn);
     const a = addDays(today, startOffset);
     const b = addDays(a, len - 1);
+    const received = `${addDays(today, -receivedDaysAgo)} ${String(receivedHour).padStart(2, '0')}:${String((p * 7) % 60).padStart(2, '0')}:00`;
+    const decided = status === 'pending' ? null : `${addDays(today, -Math.max(0, receivedDaysAgo - 1))} 14:00:00`;
     const id = Number(
       db
-        .prepare("INSERT INTO leave_requests (person_id, type_code, start_date, end_date, days, note, status, decided_at, decision_note) VALUES (?, 'AL', ?, ?, ?, ?, ?, ?, ?)")
-        .run(p, a, b, workDays(p, a, b), note, status, status === 'pending' ? null : new Date().toISOString(), status === 'rejected' ? 'Team is already short that week' : null).lastInsertRowid,
+        .prepare(
+          "INSERT INTO leave_requests (person_id, type_code, start_date, end_date, days, note, status, created_at, decided_at, decision_note) VALUES (?, 'AL', ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(p, a, b, workDays(p, a, b), note, status, received, decided, status === 'rejected' ? 'Team is already short that week' : null).lastInsertRowid,
     );
-    db.prepare("INSERT INTO leave_events (request_id, username, action, note) VALUES (?, ?, 'requested', ?)").run(id, sn, note);
-    if (status !== 'pending') db.prepare('INSERT INTO leave_events (request_id, username, action, note) VALUES (?, ?, ?, ?)').run(id, 'manager', status === 'rejected' ? 'reject' : 'approve', null);
+    db.prepare("INSERT INTO leave_events (request_id, at, username, action, note) VALUES (?, ?, ?, 'requested', ?)").run(id, received, sn, note);
+    if (status !== 'pending') db.prepare('INSERT INTO leave_events (request_id, at, username, action, note) VALUES (?, ?, ?, ?, ?)').run(id, decided, 'manager', status === 'rejected' ? 'reject' : 'approve', null);
   };
   db.prepare('INSERT INTO leave_lockdowns (name, start_date, end_date, note) VALUES (?,?,?,?)').run(
     'Winter operation',
@@ -100,12 +104,21 @@ tx(db, () => {
     addDays(today, 40),
     'Maximum staffing needed for the winter operation',
   );
-  leave('1003', 21, 7, 'pending', 'Family holiday');
-  leave('1005', 35, 4, 'pending', null);
-  leave('1001', 49, 5, 'pending', 'Long weekend away');
-  leave('1010', 14, 7, 'approved', 'Booked flights');
-  leave('1019', 28, 3, 'approved', null);
-  leave('1006', 10, 2, 'rejected', 'Wedding');
+  leave('1003', 21, 7, 'pending', 'Family holiday', 5, 8);
+  leave('1005', 35, 4, 'pending', null, 3, 11);
+  leave('1001', 49, 5, 'pending', 'Long weekend away', 1, 16);
+  leave('1010', 14, 7, 'approved', 'Booked flights', 14, 10);
+  leave('1019', 28, 3, 'approved', null, 11, 9);
+  leave('1006', 10, 2, 'rejected', 'Wedding', 9, 15);
+  // A queue of requests for the Winter operation lockdown, received on different days.
+  leave('1004', 27, 3, 'approved', 'Christmas shopping', 9, 8);
+  leave('1007', 30, 2, 'approved', null, 6, 13);
+  leave('1012', 29, 4, 'approved', 'Family visiting', 12, 9);
+  leave('1013', 33, 3, 'pending', null, 2, 10);
+  leave('1020', 26, 5, 'approved', "Children's nativity play", 4, 17);
+  leave('1026', 31, 2, 'pending', 'Wedding anniversary', 1, 9);
+  leave('1015', 36, 3, 'approved', null, 8, 12);
+  leave('1029', 37, 2, 'approved', 'Hospital appointment', 2, 8);
 
   const user = (username, password, role, personId = null) =>
     db

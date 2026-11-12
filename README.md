@@ -48,6 +48,18 @@ Staff No | Name | Initials | Mobile | [Team] | <accreditation columns…> | 01/1
 
 **Leave lockdowns** (Manage → Leave lockdowns) are periods when leave needs extra control, such as a major operation. They can cover all teams or one team. During a lockdown, line managers can still approve leave, but **only someone who supervises the planners** (an account with the **Planner supervisor** tick box) can add it to the roster. Planners, admins and leave administrators can't; they see "needs a planner supervisor" instead of the button. Lockdowns are shown on the request form, on each request and its day-by-day breakdown, and as a red edge on the plan's date headers.
 
+**Work queues and filters.** The *To approve*, *To add to roster* and *All requests* tabs share a filter bar, so a busy period can be worked through as a queue:
+
+| Filter or option | What it does |
+| --- | --- |
+| Order | **Order received (oldest first)** is the default for the queues. Each request is numbered #1, #2… in that order, shows when it was received and how long it has waited (since approval, once approved). Other orders: newest first, date approved, leave start date, team, name, most working days. |
+| Leave lockdown | A specific lockdown, any lockdown, or not in a lockdown. Use it to work through everyone waiting for one lockdown period. |
+| Status, Team, Leave between, Search | Narrow by status (with counts), team, leave dates overlapping a range, or name / staff number. |
+| Team clashes | Each request flags how many team-mates are off at the same time; tick *Only where team-mates are off at the same time* to see just those. |
+| Bulk actions | Tick requests (or *Select all shown*) and **Approve selected** or **Add to roster selected**. They are processed in the order shown and any that can't be done are listed. |
+
+Filters are remembered on each device per tab, and *Clear filters* resets them.
+
 **Public holidays** are kept under Manage → Public holidays. **Add UK bank holidays** fills in a whole year for England and Wales, Scotland or Northern Ireland, including substitute days. One-off holidays (e.g. a coronation) are added by hand. Holidays are highlighted on the plan, Day view and My duties, and aren't counted as working days of leave.
 
 **Set-up:**

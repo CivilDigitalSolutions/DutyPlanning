@@ -92,23 +92,34 @@ export function seedDemo(today) {
   db.leave = [];
   db.leaveEvents = [];
   const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  const leave = (sn, offset, len, status, note) => {
+  const leave = (sn, offset, len, status, note, receivedDaysAgo = 3, receivedHour = 9) => {
     const pid = pidOf(sn);
     const start = addDays(today, offset);
     const end = addDays(start, len - 1);
     const days = eachDate(start, end).filter((d) => db.asg[`${pid}|${d}`] && db.asg[`${pid}|${d}`].c !== 'RD').length;
     const rid = nextId();
-    db.leave.push({ id: rid, personId: pid, type: 'AL', start, end, days, note, status, createdAt: now, decidedAt: status === 'pending' ? null : now, decidedBy: status === 'pending' ? null : 'Team leader', decisionNote: status === 'rejected' ? 'Team is already short that week' : null });
-    db.leaveEvents.push({ id: nextId(), requestId: rid, at: now, username: db.people.find((p) => p.id === pid).name, action: 'requested', note });
-    if (status !== 'pending') db.leaveEvents.push({ id: nextId(), requestId: rid, at: now, username: 'Team leader', action: status === 'rejected' ? 'reject' : 'approve', note: null });
+    const received = `${addDays(today, -receivedDaysAgo)} ${String(receivedHour).padStart(2, '0')}:${String((pid * 7) % 60).padStart(2, '0')}:00`;
+    const decided = status === 'pending' ? null : `${addDays(today, -Math.max(0, receivedDaysAgo - 1))} 14:00:00`;
+    db.leave.push({ id: rid, personId: pid, type: 'AL', start, end, days, note, status, createdAt: received, decidedAt: decided, decidedBy: status === 'pending' ? null : 'Team leader', decisionNote: status === 'rejected' ? 'Team is already short that week' : null });
+    db.leaveEvents.push({ id: nextId(), requestId: rid, at: received, username: db.people.find((p) => p.id === pid).name, action: 'requested', note });
+    if (status !== 'pending') db.leaveEvents.push({ id: nextId(), requestId: rid, at: decided, username: 'Team leader', action: status === 'rejected' ? 'reject' : 'approve', note: null });
   };
   db.lockdowns = [{ id: nextId(), name: 'Winter operation', start: addDays(today, 26), end: addDays(today, 40), teamId: null, note: 'Maximum staffing needed for the winter operation' }];
-  leave('1003', 21, 7, 'pending', 'Family holiday');
-  leave('1005', 35, 4, 'pending', null);
-  leave('1001', 49, 5, 'pending', 'Long weekend away');
-  leave('1010', 14, 7, 'approved', 'Booked flights');
-  leave('1019', 28, 3, 'approved', null);
-  leave('1006', 10, 2, 'rejected', 'Wedding');
+  leave('1003', 21, 7, 'pending', 'Family holiday', 5, 8);
+  leave('1005', 35, 4, 'pending', null, 3, 11);
+  leave('1001', 49, 5, 'pending', 'Long weekend away', 1, 16);
+  leave('1010', 14, 7, 'approved', 'Booked flights', 14, 10);
+  leave('1019', 28, 3, 'approved', null, 11, 9);
+  leave('1006', 10, 2, 'rejected', 'Wedding', 9, 15);
+  // A queue of requests for the Winter operation lockdown, received on different days.
+  leave('1004', 27, 3, 'approved', 'Christmas shopping', 9, 8);
+  leave('1007', 30, 2, 'approved', null, 6, 13);
+  leave('1012', 29, 4, 'approved', 'Family visiting', 12, 9);
+  leave('1013', 33, 3, 'pending', null, 2, 10);
+  leave('1020', 26, 5, 'approved', "Children's nativity play", 4, 17);
+  leave('1026', 31, 2, 'pending', 'Wedding anniversary', 1, 9);
+  leave('1015', 36, 3, 'approved', null, 8, 12);
+  leave('1029', 37, 2, 'approved', 'Hospital appointment', 2, 8);
   db.seq = id;
   return db;
 }

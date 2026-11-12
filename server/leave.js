@@ -133,7 +133,7 @@ export function registerLeaveRoutes(app, { db, staff, planner, json, wrap, HttpE
       where += ' AND r.end_date >= ?';
       args.push(from);
     }
-    const rows = db.prepare(`${SELECT} WHERE ${where} ORDER BY CASE r.status WHEN 'pending' THEN 0 WHEN 'cancel_requested' THEN 1 WHEN 'approved' THEN 2 ELSE 3 END, r.start_date DESC LIMIT 500`).all(...args);
+    const rows = db.prepare(`${SELECT} WHERE ${where} ORDER BY CASE r.status WHEN 'pending' THEN 0 WHEN 'cancel_requested' THEN 1 WHEN 'approved' THEN 2 ELSE 3 END, r.start_date DESC LIMIT 2000`).all(...args);
     const locks = allLockdowns();
     res.json({ requests: rows.map(withActions(u, locks)) });
   });

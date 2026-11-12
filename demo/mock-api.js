@@ -10,7 +10,7 @@ import { parseUserRows, generatePassword, templateCsv, ROLES } from '../server/u
 import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, validateRequestDates, lockdownsFor, canRosterLockdown } from '../server/leave-rules.js';
 import { dialog, html, todayIso } from '../public/js/util.js';
 
-const KEY = 'dp-demo-v6';
+const KEY = 'dp-demo-v7';
 const RANK = { staff: 1, planner: 2, admin: 3 };
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -861,7 +861,7 @@ on('GET', '/leave', ({ query }) => {
   if (STATUSES.includes(query.status)) list = list.filter((r) => r.status === query.status);
   const rank = { pending: 0, cancel_requested: 1, approved: 2 };
   list = [...list].sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3) || (a.start < b.start ? 1 : a.start > b.start ? -1 : 0));
-  return { requests: list.slice(0, 500).map(withActs(u)) };
+  return { requests: list.slice(0, 2000).map(withActs(u)) };
 });
 
 on('GET', '/leave/preview', ({ query }) => {

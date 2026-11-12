@@ -1668,3 +1668,86 @@ td.hol-date {
   background: var(--lock);
   vertical-align: middle;
 }
+
+/* Leave work queues */
+.filters {
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+.filters summary {
+  cursor: pointer;
+  list-style: none;
+}
+.filters summary::-webkit-details-marker {
+  display: none;
+}
+.filters summary::before {
+  content: '▸ ';
+  color: var(--muted);
+}
+.filters[open] summary::before {
+  content: '▾ ';
+}
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px 12px;
+  margin-top: 10px;
+  align-items: end;
+}
+.filter-grid label.check {
+  grid-column: span 2;
+}
+.filter-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.queue-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 8px;
+  min-height: 34px;
+}
+.queue-count {
+  color: var(--muted);
+  font-size: 13px;
+}
+.bulk {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.queue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.queue-no {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--primary);
+  min-width: 28px;
+}
+.pick input {
+  width: 18px;
+  height: 18px;
+}
+.clash {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn);
+}
+.bulk-list {
+  max-height: 260px;
+  overflow: auto;
+  padding-left: 20px;
+}
+@media (max-width: 520px) {
+  .filter-grid label.check {
+    grid-column: auto;
+  }
+}

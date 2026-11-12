@@ -1,7 +1,7 @@
 // Annual leave: request -> line manager approves -> leave administrator adds it to the roster.
 import { get, post } from '../api.js';
 import { state, codeInfo } from '../state.js';
-import { $, html, toast, dialog, fmtDate, todayIso, addDays, contrast, debounce, dayNum } from '../util.js';
+import { $, html, toast, dialog, fmtDate, todayIso, addDays, contrast, debounce, dayNum, store } from '../util.js';
 
 const STATUS = {
   pending: ['Awaiting approval', 'pending'],
@@ -90,10 +90,11 @@ function lockdownNote(r) {
         : ''
   }</div>`;
 }
-function requestCard(r, { showPerson = true } = {}) {
+function requestCard(r, { showPerson = true, meta = '' } = {}) {
   const acts = actionsOf(r);
   return html`<li class="req card" data-id="${r.id}">
     <div class="req-main">
+      ${meta}
       <div class="req-top">
         ${showPerson ? html`<strong>${r.personName}</strong><span class="muted">${r.teamName || 'No team'}</span>` : ''}
         ${pill(r.status)}
@@ -321,69 +322,249 @@ async function mine(body, sum, refresh) {
   body.querySelectorAll('.req-list').forEach((el) => bindList(el, requests, refresh));
 }
 
-async function approve(body, sum, refresh) {
-  const { requests } = await get('/leave?scope=approve');
-  const pending = requests.filter((r) => r.status === 'pending');
-  const others = requests.filter((r) => r.status !== 'pending').slice(0, 50);
-  body.innerHTML = html`
-    <div class="toolbar"><h2>Leave to approve</h2></div>
-    <p class="muted">Requests from people you line manage${sum.administers || state.user.role === 'admin' ? ', and from people with no line manager set' : ''}. Approved leave goes to the leave administrators, who add it to the roster.</p>
-    ${pending.length ? html`<ul class="req-list" data-list="p">${pending.map((r) => requestCard(r))}</ul>` : html`<p class="empty-inline">Nothing waiting for you.</p>`}
-    ${others.length ? html`<h3>Recent decisions</h3><ul class="req-list" data-list="o">${others.map((r) => requestCard(r))}</ul>` : ''}`;
-  body.querySelectorAll('.req-list').forEach((el) => bindList(el, requests, refresh));
+// ---------- work queues: To approve / To add to roster / All requests ----------
+const ACTIVE = ['pending', 'approved', 'applied', 'cancel_requested'];
+const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const SORTS = {
+  received: ['Order received - oldest first', (a, b) => cmp(a.createdAt, b.createdAt) || a.id - b.id],
+  receivedDesc: ['Order received - newest first', (a, b) => cmp(b.createdAt, a.createdAt) || b.id - a.id],
+  approved: ['Date approved - oldest first', (a, b) => cmp(a.decidedAt || '~', b.decidedAt || '~') || cmp(a.createdAt, b.createdAt)],
+  start: ['Leave start date', (a, b) => cmp(a.start, b.start) || cmp(a.createdAt, b.createdAt)],
+  team: ['Team, then order received', (a, b) => cmp(a.teamName || '~', b.teamName || '~') || cmp(a.createdAt, b.createdAt)],
+  name: ['Name', (a, b) => a.personName.localeCompare(b.personName)],
+  days: ['Most working days first', (a, b) => b.days - a.days || cmp(a.createdAt, b.createdAt)],
+};
+const QUEUES = {
+  approve: {
+    title: 'Leave to approve',
+    scope: 'approve',
+    statuses: ['pending', 'approved', 'applied', 'rejected', 'cancel_requested', 'cancelled'],
+    defaults: { status: 'pending', sort: 'received' },
+    bulk: 'approve',
+    intro: (sum) =>
+      `Requests from people you line manage${sum.administers || state.user.role === 'admin' ? ', and from people with no line manager set' : ''}. Approved leave goes to the leave administrators, who add it to the roster.`,
+  },
+  apply: {
+    title: 'Leave to add to the roster',
+    scope: 'apply',
+    statuses: ['approved', 'cancel_requested', 'applied'],
+    defaults: { status: 'approved', sort: 'received' },
+    bulk: 'apply',
+    intro: () => 'Approved leave waiting to go on the roster, cancellations to process, and leave already added.',
+  },
+  all: {
+    title: 'All leave requests',
+    scope: 'all',
+    statuses: Object.keys(STATUS),
+    defaults: { status: '', sort: 'receivedDesc' },
+    bulk: null,
+    intro: () => 'Every leave request, in any state.',
+  },
+};
+const stamp = (s) => (s ? new Date(s.replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? '' : 'Z')) : null);
+const fmtStamp = (s) => {
+  const d = stamp(s);
+  return d ? `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '';
+};
+const ago = (s) => {
+  const d = stamp(s);
+  if (!d) return '';
+  const days = Math.floor((Date.now() - d) / 864e5);
+  return days <= 0 ? 'today' : days === 1 ? '1 day' : `${days} days`;
+};
+
+function queueMeta(r, { queueNo, selectable, selected, clashes }) {
+  const waitingSince = r.status === 'pending' ? r.createdAt : r.status === 'approved' ? r.decidedAt || r.createdAt : null;
+  return html`<div class="queue-meta">
+    ${selectable ? html`<label class="pick" title="Select"><input type="checkbox" data-pick="${r.id}" ${selected ? 'checked' : ''} aria-label="Select ${r.personName}" /></label>` : ''}
+    ${queueNo ? html`<span class="queue-no" title="Position in this queue">#${queueNo}</span>` : ''}
+    <span class="muted small">Received ${fmtStamp(r.createdAt)}${waitingSince ? html` · <b>waiting ${ago(waitingSince)}</b>${r.status === 'approved' ? ' since approval' : ''}` : ''}</span>
+    ${clashes.length ? html`<span class="clash" title="${clashes.map((c) => `${c.personName}: ${range(c)} (${STATUS[c.status]?.[0]})`).join('\n')}">⚠ ${plural(clashes.length, 'other')} in ${r.teamName} off at the same time</span>` : ''}
+  </div>`;
 }
 
-async function apply(body, sum, refresh) {
-  const { requests } = await get('/leave?scope=apply');
-  const approved = requests.filter((r) => r.status === 'approved');
-  const cancels = requests.filter((r) => r.status === 'cancel_requested');
-  const applied = requests.filter((r) => r.status === 'applied' && r.end >= addDays(todayIso(), -30)).slice(0, 50);
-  body.innerHTML = html`
-    <div class="toolbar"><h2>Approved leave to add to the roster</h2></div>
-    ${approved.length ? html`<ul class="req-list" data-list="a">${approved.map((r) => requestCard(r))}</ul>` : html`<p class="empty-inline">No approved leave waiting.</p>`}
-    ${cancels.length ? html`<h3>Cancellations to process</h3><ul class="req-list" data-list="c">${cancels.map((r) => requestCard(r))}</ul>` : ''}
-    ${applied.length ? html`<h3>Recently added to the roster</h3><ul class="req-list" data-list="d">${applied.map((r) => requestCard(r))}</ul>` : ''}`;
-  body.querySelectorAll('.req-list').forEach((el) => bindList(el, requests, refresh));
-}
+async function queue(tab, body, sum, refresh) {
+  const cfg = QUEUES[tab];
+  const [{ requests }, { lockdowns }] = await Promise.all([get(`/leave?scope=${cfg.scope}`), get('/lockdowns')]);
+  const saved = store.get(`leaveq.${tab}`, {});
+  const f = { q: '', lockdown: '', team: '', from: '', to: '', clashes: false, ...cfg.defaults, ...saved };
+  if (f.status && !cfg.statuses.includes(f.status)) f.status = cfg.defaults.status;
+  if (!SORTS[f.sort]) f.sort = cfg.defaults.sort;
+  const selected = new Set();
 
-async function all(body, sum, refresh) {
-  let status = '';
-  let q = '';
+  // Team-mates off at overlapping times (among requests in this list).
+  const clashesOf = new Map(
+    requests.map((r) => [
+      r.id,
+      requests.filter((o) => o.id !== r.id && o.teamId && o.teamId === r.teamId && o.personId !== r.personId && ACTIVE.includes(o.status) && o.start <= r.end && o.end >= r.start),
+    ]),
+  );
+  const teams = [...new Map(requests.filter((r) => r.teamId).map((r) => [r.teamId, r.teamName])).entries()].sort((a, b) => cmp(a[1], b[1]));
+  const counts = Object.fromEntries(cfg.statuses.map((st) => [st, requests.filter((r) => r.status === st).length]));
+  const lockLabel = (l) => `${l.name} (${range(l)})`;
+  const relevantLocks = lockdowns.filter((l) => requests.some((r) => r.lockdowns?.some((x) => x.id === l.id)) || l.end >= todayIso());
+
   body.innerHTML = html`
-    <div class="toolbar"><h2>All leave requests</h2><span class="spacer"></span>
-      <input type="search" placeholder="Search name" data-f="q" />
-      <select data-f="status"><option value="">Any status</option>${Object.entries(STATUS).map(([k, [l]]) => html`<option value="${k}">${l}</option>`)}</select>
+    <div class="toolbar"><h2>${cfg.title}</h2></div>
+    <p class="muted">${cfg.intro(sum)}</p>
+    <details class="filters card" ${innerWidth > 720 ? 'open' : ''}>
+      <summary><b>Filter and order</b> <span class="muted filter-summary"></span></summary>
+      <div class="filter-grid">
+        <label>Status<select data-f="status">${cfg.statuses.length > 1 ? html`<option value="">Any status (${requests.length})</option>` : ''}${cfg.statuses.map(
+          (st) => html`<option value="${st}" ${f.status === st ? 'selected' : ''}>${STATUS[st][0]} (${counts[st]})</option>`,
+        )}</select></label>
+        <label>Leave lockdown<select data-f="lockdown">
+          <option value="">Any</option>
+          <option value="any" ${f.lockdown === 'any' ? 'selected' : ''}>In any lockdown</option>
+          <option value="none" ${f.lockdown === 'none' ? 'selected' : ''}>Not in a lockdown</option>
+          ${relevantLocks.map((l) => html`<option value="${l.id}" ${String(f.lockdown) === String(l.id) ? 'selected' : ''}>${lockLabel(l)}</option>`)}
+        </select></label>
+        <label>Team<select data-f="team"><option value="">All teams</option>${teams.map(([id, name]) => html`<option value="${id}" ${String(f.team) === String(id) ? 'selected' : ''}>${name}</option>`)}</select></label>
+        <label>Order<select data-f="sort">${Object.entries(SORTS).map(([k, [l]]) => html`<option value="${k}" ${f.sort === k ? 'selected' : ''}>${l}</option>`)}</select></label>
+        <label>Leave between<input type="date" data-f="from" value="${f.from}" /></label>
+        <label>and<input type="date" data-f="to" value="${f.to}" /></label>
+        <label>Search<input type="search" data-f="q" value="${f.q}" placeholder="Name or staff no." /></label>
+        <label class="check"><input type="checkbox" data-f="clashes" ${f.clashes ? 'checked' : ''} /> Only where team-mates are off at the same time</label>
+        <div class="filter-actions"><button type="button" class="btn btn-sm" data-act="reset">Clear filters</button></div>
+      </div>
+    </details>
+    <div class="queue-bar">
+      <span class="queue-count"></span>
+      <span class="spacer"></span>
+      ${cfg.bulk ? html`<span class="bulk" hidden><b class="bulk-n"></b> <button type="button" class="btn btn-sm" data-act="selectAll">Select all shown</button>
+        <button type="button" class="btn btn-sm btn-primary" data-act="bulk">${ACTION_LABEL[cfg.bulk]} selected</button>
+        <button type="button" class="btn btn-sm btn-ghost" data-act="clearSel">Clear</button></span>
+        <button type="button" class="btn btn-sm" data-act="selectAll" data-when-empty>Select all shown</button>` : ''}
     </div>
-    <div class="table-wrap"><table class="data"><thead><tr><th>Person</th><th>Team</th><th>Dates</th><th>Days</th><th>Type</th><th>Status</th><th>Manager</th><th></th></tr></thead><tbody></tbody></table></div>`;
-  let list = [];
+    <ul class="req-list" data-list="q"></ul>`;
+
+  const listEl = $('.req-list', body);
+  let shown = [];
+  const filtered = () =>
+    requests
+      .filter((r) => !f.status || r.status === f.status)
+      .filter((r) => {
+        const ids = (r.lockdowns || []).map((l) => String(l.id));
+        return !f.lockdown || (f.lockdown === 'any' ? ids.length > 0 : f.lockdown === 'none' ? ids.length === 0 : ids.includes(String(f.lockdown)));
+      })
+      .filter((r) => !f.team || String(r.teamId) === String(f.team))
+      .filter((r) => (!f.from || r.end >= f.from) && (!f.to || r.start <= f.to))
+      .filter((r) => !f.q || `${r.personName} ${r.staffNumber || ''}`.toLowerCase().includes(f.q.toLowerCase()))
+      .filter((r) => !f.clashes || clashesOf.get(r.id).length)
+      .sort(SORTS[f.sort][1]);
+
   const draw = () => {
-    const rows = list.filter((r) => !q || r.personName.toLowerCase().includes(q));
-    body.querySelector('tbody').innerHTML = rows.length
-      ? html`${rows.map(
-          (r) => html`<tr data-id="${r.id}"><td>${r.personName}</td><td>${r.teamName || '–'}</td><td>${range(r)}</td><td>${r.days}</td><td>${chip(r.type)}</td><td>${pill(r.status)}</td>
-            <td>${r.managerName || html`<span class="muted">–</span>`}</td><td class="actions"><button class="btn btn-sm" data-act="open">Details</button></td></tr>`,
+    shown = filtered();
+    const numbered = f.sort === 'received' || f.sort === 'approved';
+    listEl.innerHTML = shown.length
+      ? html`${shown.map((r, i) =>
+          requestCard(r, {
+            meta: queueMeta(r, {
+              queueNo: numbered ? i + 1 : null,
+              selectable: cfg.bulk && r.actions[cfg.bulk],
+              selected: selected.has(r.id),
+              clashes: clashesOf.get(r.id),
+            }),
+          }),
         )}`
-      : '<tr><td colspan="8" class="empty">No requests</td></tr>';
+      : html`<li class="empty-inline">No requests match these filters.</li>`;
+    const active = [
+      f.status && STATUS[f.status][0],
+      f.lockdown && (f.lockdown === 'any' ? 'in a lockdown' : f.lockdown === 'none' ? 'no lockdown' : lockdowns.find((l) => String(l.id) === String(f.lockdown))?.name),
+      f.team && teams.find(([id]) => String(id) === String(f.team))?.[1],
+      (f.from || f.to) && `${f.from ? fmtDate(f.from, 'dm') : '…'} – ${f.to ? fmtDate(f.to, 'dm') : '…'}`,
+      f.q && `"${f.q}"`,
+      f.clashes && 'team clashes',
+    ].filter(Boolean);
+    $('.filter-summary', body).textContent = active.length ? `· ${active.join(' · ')}` : '';
+    $('.queue-count', body).textContent = `Showing ${shown.length} of ${plural(requests.length, 'request')} · ${SORTS[f.sort][0].toLowerCase()}`;
+    drawBulk();
   };
-  const load = async () => {
-    list = (await get(`/leave?scope=all${status ? `&status=${status}` : ''}`)).requests;
-    draw();
+  const drawBulk = () => {
+    if (!cfg.bulk) return;
+    for (const id of [...selected]) if (!shown.some((r) => r.id === id)) selected.delete(id);
+    const n = selected.size;
+    $('.bulk', body).hidden = !n;
+    $('[data-when-empty]', body).hidden = !!n || !shown.some((r) => r.actions[cfg.bulk]);
+    $('.bulk-n', body).textContent = `${n} selected`;
   };
-  body.onchange = (e) => {
-    if (e.target.dataset.f === 'status') {
-      status = e.target.value;
-      load();
-    }
-  };
-  body.oninput = (e) => {
-    if (e.target.dataset.f === 'q') {
-      q = e.target.value.toLowerCase();
+  const save = () => store.set(`leaveq.${tab}`, f);
+
+  body.oninput = debounce((e) => {
+    const k = e.target.dataset.f;
+    if (k === 'q') {
+      f.q = e.target.value.trim();
+      save();
       draw();
     }
+  }, 150);
+  body.onchange = (e) => {
+    const k = e.target.dataset.f;
+    if (e.target.dataset.pick) {
+      const id = Number(e.target.dataset.pick);
+      if (e.target.checked) selected.add(id);
+      else selected.delete(id);
+      return drawBulk();
+    }
+    if (!k || k === 'q') return;
+    f[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    save();
+    draw();
   };
-  body.onclick = (e) => {
-    const tr = e.target.closest('[data-id]');
-    if (tr && e.target.closest('[data-act=open]')) openRequest(Number(tr.dataset.id), refresh);
+  body.onclick = async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const a = b.dataset.act;
+    if (a === 'reset') {
+      store.set(`leaveq.${tab}`, {});
+      return queue(tab, body, sum, refresh);
+    }
+    if (a === 'selectAll') {
+      shown.filter((r) => r.actions[cfg.bulk]).forEach((r) => selected.add(r.id));
+      return draw();
+    }
+    if (a === 'clearSel') {
+      selected.clear();
+      return draw();
+    }
+    if (a === 'bulk') return runBulk(cfg.bulk, shown.filter((r) => selected.has(r.id)), refresh);
+    const li = b.closest('[data-id]');
+    if (!li) return;
+    const r = requests.find((x) => x.id === Number(li.dataset.id));
+    if (a === 'open') openRequest(r.id, refresh);
+    else act(r, a, refresh);
   };
-  await load();
+  draw();
 }
+
+/** Approve, or add to the roster, several requests in the order shown. */
+async function runBulk(action, list, refresh) {
+  if (!list.length) return;
+  const what =
+    action === 'approve'
+      ? `Approve ${plural(list.length, 'request')}? They then go to the leave administrators to add to the roster.`
+      : `Add ${plural(list.length, 'request')} to the roster, in the order shown? Each uses its own leave type; rest days and public holidays become Rest Day / Public holiday leave.`;
+  const d = dialog(
+    `${ACTION_LABEL[action]} selected`,
+    html`<p>${what}</p><ol class="bulk-list">${list.map((r) => html`<li>${r.personName} · ${range(r)} · ${plural(r.days, 'working day')}</li>`)}</ol>`,
+    { actions: `<button value="cancel" class="btn" formnovalidate>Back</button><button value="ok" class="btn btn-primary">${ACTION_LABEL[action]} ${list.length}</button>` },
+  );
+  if ((await d.closed) !== 'ok') return;
+  let ok = 0;
+  const failed = [];
+  for (const r of list) {
+    try {
+      await post(`/leave/${r.id}/${action}`, action === 'apply' ? { code: r.type } : {});
+      ok++;
+    } catch (e) {
+      failed.push(`${r.personName}: ${e.message}`);
+    }
+  }
+  toast(`${ok} done${failed.length ? ` · ${failed.length} not done` : ''}`, failed.length ? 'warn' : 'success', failed.length ? 8000 : 3500);
+  if (failed.length) dialog('Some requests were not processed', html`<ul>${failed.map((m) => html`<li>${m}</li>`)}</ul>`);
+  refresh();
+}
+
+const approve = (body, sum, refresh) => queue('approve', body, sum, refresh);
+const apply = (body, sum, refresh) => queue('apply', body, sum, refresh);
+const all = (body, sum, refresh) => queue('all', body, sum, refresh);
