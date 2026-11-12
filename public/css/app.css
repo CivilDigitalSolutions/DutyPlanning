@@ -17,6 +17,8 @@
   --today: #e8590c;
   --sel: #1f6feb;
   --vacant: repeating-linear-gradient(135deg, transparent 0 6px, rgba(0, 0, 0, 0.04) 6px 12px);
+  --ph: #7a3fb8;
+  --ph-bg: rgba(122, 63, 184, 0.09);
   --radius: 10px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
   --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.18);
@@ -28,6 +30,8 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
+    --ph: #c39bf0;
+    --ph-bg: rgba(195, 155, 240, 0.12);
     --bg: #0f1720;
     --surface: #17212c;
     --surface-2: #1c2834;
@@ -44,6 +48,8 @@
   }
 }
 :root[data-theme='dark'] {
+  --ph: #c39bf0;
+  --ph-bg: rgba(195, 155, 240, 0.12);
   --bg: #0f1720;
   --surface: #17212c;
   --surface-2: #1c2834;
@@ -1567,4 +1573,60 @@ code {
 }
 .mine-head .row-btns {
   justify-content: flex-end;
+}
+
+/* Public holidays */
+.grid th.d.ph {
+  background: var(--ph-bg);
+  box-shadow: inset 0 -3px 0 var(--ph);
+}
+.grid th.d.ph span {
+  color: var(--ph);
+  font-weight: 700;
+}
+.grid td.ph:not([style]) {
+  background-color: var(--ph-bg);
+}
+.grid td.c.long {
+  font-size: 9px;
+  letter-spacing: -0.02em;
+}
+.ph-name {
+  font-size: 11px;
+  color: var(--ph);
+  font-weight: 600;
+}
+.mini-day.ph small {
+  color: var(--ph);
+  font-weight: 700;
+}
+.holiday-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ph);
+  background: var(--ph-bg);
+}
+
+.gen-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+  margin: 8px 0 14px;
+}
+.gen-form strong {
+  flex-basis: 100%;
+}
+.gen-form label {
+  min-width: 140px;
+}
+.gen-form small {
+  flex-basis: 100%;
+}
+td.hol-date {
+  width: 220px;
+  font-variant-numeric: tabular-nums;
 }

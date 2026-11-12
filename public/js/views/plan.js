@@ -207,9 +207,11 @@ export async function render(root) {
     const a = data.cells.get(`${p.id}|${d}`);
     let cls = 'c';
     if (isWeekend(d)) cls += ' we';
+    if (data.publicHolidays?.[d]) cls += ' ph';
     if (d === today) cls += ' td';
     if (!a) return `<td class="${cls}" data-r="${r}" data-c="${c}"></td>`;
     if (a.n) cls += ' note';
+    if (a.c.length > 3) cls += ' long';
     if (a.c === '*') cls += ' masked';
     const info = codeInfo(a.c);
     const title = `${info.label}${a.n ? ' - ' + a.n : ''}`;
@@ -235,7 +237,9 @@ export async function render(root) {
     }
     h += '</tr><tr>';
     for (const d of dates)
-      h += `<th class="d${isWeekend(d) ? ' we' : ''}${d === today ? ' td' : ''}" data-date="${d}"><span>${esc(fmtDate(d, 'dow').slice(0, 2))}</span><b>${dayNum(d)}</b></th>`;
+      h += `<th class="d${isWeekend(d) ? ' we' : ''}${d === today ? ' td' : ''}${data.publicHolidays?.[d] ? ' ph' : ''}" data-date="${d}"${
+        data.publicHolidays?.[d] ? ` title="${esc(data.publicHolidays[d])}"` : ''
+      }><span>${data.publicHolidays?.[d] ? 'Hol' : esc(fmtDate(d, 'dow').slice(0, 2))}</span><b>${dayNum(d)}</b></th>`;
     h += '</tr></thead>';
 
     personRows = [];

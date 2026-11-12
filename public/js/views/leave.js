@@ -141,16 +141,25 @@ async function act(r, action, refresh) {
   });
 }
 
-function breakdownTable(days, { applying = false, includeRest = false } = {}) {
+// What each day becomes when leave is added (mirrors leavePlan in server/leave-rules.js).
+function planCode(d, code) {
+  const has = (c) => state.codeMap.has(c.toLowerCase());
+  if (d.category === 'leave' && !/^(PH|RD)-/i.test(d.code || '')) return null;
+  if (d.publicHoliday) return has(`PH-${code}`) ? `PH-${code}` : code;
+  if (d.working) return code;
+  return has(`RD-${code}`) ? `RD-${code}` : null;
+}
+
+function breakdownTable(days, { applyCode = null } = {}) {
   return html`<div class="table-wrap day-table"><table class="data">
-    <thead><tr><th>Day</th><th>Rostered</th>${applying ? html`<th>Becomes</th>` : ''}<th>Team on duty (after this leave)</th></tr></thead>
+    <thead><tr><th>Day</th><th>Rostered</th>${applyCode ? html`<th>Becomes</th>` : ''}<th>Team on duty after</th></tr></thead>
     <tbody>${days.map((d) => {
-      const changes = applying && d.category !== 'leave' && (d.working || includeRest);
+      const becomes = applyCode ? planCode(d, applyCode) : null;
       return html`<tr class="${d.coverLow ? 'row-error' : ''} ${d.working ? '' : 'muted'}">
-        <td>${fmtDate(d.date, 'dow')} ${fmtDate(d.date, 'dm')}</td>
-        <td>${chip(d.code)} ${d.working ? '' : html`<small>not counted</small>`}</td>
-        ${applying ? html`<td>${changes ? html`<span data-new></span>` : html`<small class="muted">unchanged</small>`}</td>` : ''}
-        <td>${d.teamOnDuty == null ? '–' : d.working && d.category === 'duty' ? html`${d.teamAfter}${d.coverLow ? html` <b class="error">below minimum</b>` : ''}` : d.teamOnDuty}</td>
+        <td>${fmtDate(d.date, 'dow')} ${fmtDate(d.date, 'dm')}${d.publicHoliday ? html`<div class="ph-name">${d.publicHoliday}</div>` : ''}</td>
+        <td>${chip(d.code)} ${d.working ? '' : html`<small>${d.publicHoliday ? 'public holiday - not counted' : 'not counted'}</small>`}</td>
+        ${applyCode ? html`<td>${becomes ? html`${chip(becomes)} <small>${codeInfo(becomes).label}</small>` : html`<small class="muted">unchanged</small>`}</td>` : ''}
+        <td>${d.teamOnDuty == null ? '–' : d.category === 'duty' ? html`${d.teamAfter}${d.coverLow ? html` <b class="error">below minimum</b>` : ''}` : d.teamOnDuty}</td>
       </tr>`;
     })}</tbody></table></div>`;
 }
@@ -198,11 +207,11 @@ async function applyDialog(r, refresh) {
   const codes = state.meta.dutyCodes.filter((c) => c.category === 'leave' && !c.private);
   const d = dialog(
     `Add leave to roster: ${r.personName}`,
-    html`<p>${range(r)} · approved${r.decidedBy ? ` by ${r.decidedBy}` : ''}. Working days get the leave code; rest days and existing leave stay as they are.
-      The days it replaces are remembered, so removing the leave later puts them back.</p>
+    html`<p>${range(r)} · approved${r.decidedBy ? ` by ${r.decidedBy}` : ''}. Working days get the leave code, rest days show as <b>Rest Day - AL</b> and
+      public holidays as <b>Public holiday - AL</b>. Existing leave such as sickness is left alone. The days it replaces are remembered, so removing the
+      leave later puts them back.</p>
       <div class="form-grid">
         <label>Code to put on the roster<select name="code">${codes.map((c) => html`<option value="${c.code}" ${c.code === r.type ? 'selected' : ''}>${c.code} - ${c.label}</option>`)}</select></label>
-        <label class="check"><input type="checkbox" name="includeRestDays" /> Also cover rest days</label>
       </div>
       ${data.coverWarnings ? html`<p class="error">Team would be below its minimum on ${plural(data.coverWarnings, 'day')}.</p>` : ''}
       <div class="apply-preview"></div>`,
@@ -210,8 +219,7 @@ async function applyDialog(r, refresh) {
   );
   const f = $('form', d);
   const draw = () => {
-    $('.apply-preview', d).innerHTML = breakdownTable(data.days, { applying: true, includeRest: f.includeRestDays.checked });
-    d.querySelectorAll('[data-new]').forEach((el) => (el.outerHTML = String(chip(f.code.value))));
+    $('.apply-preview', d).innerHTML = breakdownTable(data.days, { applyCode: f.code.value });
   };
   f.addEventListener('change', draw);
   draw();
@@ -219,7 +227,7 @@ async function applyDialog(r, refresh) {
     if (e.submitter?.value !== 'ok') return;
     e.preventDefault();
     try {
-      await post(`/leave/${r.id}/apply`, { code: f.code.value, includeRestDays: f.includeRestDays.checked });
+      await post(`/leave/${r.id}/apply`, { code: f.code.value });
       d.close();
       toast('Leave added to the roster', 'success');
       refresh();
@@ -253,7 +261,10 @@ function requestDialog(sum, refresh) {
       const manager = state.user.person?.lineManagerId;
       box.innerHTML = html`
         <p><b>${plural(p.workingDays, 'working day')}</b> will come off your allowance${sum.mine?.allowance != null ? html` (${Math.max(0, sum.mine.allowance - sum.mine.booked - sum.mine.pending)} left this leave year before this request)` : ''}.</p>
-        <div class="mini-days">${p.days.map((x) => html`<div class="mini-day ${x.working ? '' : 'off'}"><small>${fmtDate(x.date, 'dow')}</small><b>${dayNum(x.date)}</b>${chip(x.code)}</div>`)}</div>
+        <div class="mini-days">${p.days.map((x) => html`<div class="mini-day ${x.working ? '' : 'off'} ${x.publicHoliday ? 'ph' : ''}" title="${x.publicHoliday || ''}"><small>${x.publicHoliday ? 'Hol' : fmtDate(x.date, 'dow')}</small><b>${dayNum(x.date)}</b>${chip(x.code)}</div>`)}</div>
+        ${p.days.some((x) => x.publicHoliday)
+          ? html`<p class="small">Public holidays in this period (not counted): ${p.days.filter((x) => x.publicHoliday).map((x) => `${fmtDate(x.date, 'dm')} ${x.publicHoliday}`).join(', ')}.</p>`
+          : ''}
         ${p.overlaps.length ? html`<p class="error">This overlaps your request for ${p.overlaps.map(range).join(', ')}.</p>` : ''}
         ${p.coverWarnings ? html`<p class="warn-text">Your team would be below its minimum on ${plural(p.coverWarnings, 'day')} - your manager will see this.</p>` : ''}
         <p class="small">${manager ? 'This goes to your line manager to approve.' : 'You have no line manager set, so an administrator will approve it.'}</p>`;

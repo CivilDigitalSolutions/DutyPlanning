@@ -1,13 +1,14 @@
 // Management screens for planners and admins.
 import { api, get, post, put, del, download } from '../api.js';
 import { state, isAdmin, loadMeta, loadRoster } from '../state.js';
-import { $, html, toast, dialog, confirmDialog, contrast, todayIso, addDays, debounce } from '../util.js';
+import { $, html, toast, dialog, confirmDialog, contrast, todayIso, addDays, debounce, fmtDate } from '../util.js';
 
 const TABS = [
   ['people', 'People'],
   ['teams', 'Teams'],
   ['codes', 'Duty codes'],
   ['accreditations', 'Accreditations'],
+  ['holidays', 'Public holidays'],
   ['import', 'Import / export'],
   ['users', 'User accounts', true],
   ['audit', 'Activity log', true],
@@ -23,7 +24,7 @@ export async function render(root, params) {
       <div class="admin-body"></div>
     </section>`;
   const body = $('.admin-body', root);
-  const handlers = { people, teams, codes, accreditations, import: importExport, users, audit };
+  const handlers = { people, teams, codes, accreditations, holidays, import: importExport, users, audit };
   await handlers[tab](body, params.slice(1));
 }
 
@@ -297,6 +298,65 @@ function accreditations(body) {
     update: (a, v) => put(`/accreditations/${a.id}`, v),
     remove: (a) => del(`/accreditations/${a.id}`),
   });
+}
+
+// ---------------- Public holidays ----------------
+async function holidays(body) {
+  const year = Number(todayIso().slice(0, 4));
+  const { holidays: list, regions } = await get(`/public-holidays?from=${year - 1}-01-01&to=${year + 3}-12-31`);
+  const byYear = {};
+  for (const h of list) (byYear[h.date.slice(0, 4)] ??= []).push(h);
+  body.innerHTML = html`
+    <div class="toolbar"><h2>Public holidays</h2><span class="spacer"></span><button class="btn btn-primary" data-act="add">Add a date</button></div>
+    <p class="muted">Public holidays are highlighted on the plan. When annual leave covers one, it goes on the roster as <b>Public holiday - AL</b> (PH-AL)
+      and is not counted against the person's allowance.</p>
+    <form class="card gen-form">
+      <strong>Add UK bank holidays</strong>
+      <label>Year<select name="year">${[year - 1, year, year + 1, year + 2].map((y) => html`<option ${y === year + (list.some((h) => h.date.startsWith(String(year))) ? 1 : 0) ? 'selected' : ''}>${y}</option>`)}</select></label>
+      <label>Region<select name="region">${Object.entries(regions).map(([k, v]) => html`<option value="${k}">${v}</option>`)}</select></label>
+      <button class="btn">Add bank holidays</button>
+      <small class="muted">Calculated from the standard rules, including substitute days. Dates already in the list are kept. Add one-off holidays by hand.</small>
+    </form>
+    ${Object.keys(byYear).length
+      ? Object.entries(byYear).map(
+          ([y, hs]) => html`<h3>${y}</h3><div class="table-wrap"><table class="data"><tbody>${hs.map(
+            (h) => html`<tr><td class="hol-date">${fmtDate(h.date, 'dow')} ${fmtDate(h.date, 'dmy')}</td><td>${h.name}</td>
+              <td class="actions"><button class="btn btn-sm btn-danger" data-del="${h.date}">Remove</button></td></tr>`,
+          )}</tbody></table></div>`,
+        )
+      : html`<p class="empty-inline">No public holidays yet. Use <b>Add UK bank holidays</b> above, or add dates by hand.</p>`}`;
+  const reload = () => holidays(body);
+  $('.gen-form', body).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const r = await post('/public-holidays/generate', { year: Number(e.target.year.value), region: e.target.region.value });
+      toast(r.added ? `Added ${r.added} bank holidays` : 'Those bank holidays are already in the list', 'success');
+      reload();
+    } catch (ex) {
+      toast(ex.message, 'error');
+    }
+  });
+  body.onclick = async (e) => {
+    const dateToDelete = e.target.closest('[data-del]')?.dataset.del;
+    if (dateToDelete) {
+      if (!(await confirmDialog(`Remove the public holiday on ${fmtDate(dateToDelete, 'dmy')}? Leave already on the roster is not changed.`, 'Remove', true))) return;
+      try {
+        await del(`/public-holidays/${dateToDelete}`);
+        reload();
+      } catch (ex) {
+        toast(ex.message, 'error');
+      }
+    }
+    if (e.target.closest('[data-act=add]'))
+      formDialog(
+        'Add a public holiday',
+        html`<div class="form-grid"><label>Date<input type="date" name="date" required /></label><label>Name<input name="name" required maxlength="100" placeholder="e.g. Coronation bank holiday" /></label></div>`,
+        async (v) => {
+          await post('/public-holidays', v);
+          reload();
+        },
+      );
+  };
 }
 
 // ---------------- Import / export ----------------
@@ -615,6 +675,7 @@ async function audit(body) {
     if (!d) return '';
     if (e.action === 'assignments.update') return `${d.count} cell(s) ${d.from}${d.to !== d.from ? ` to ${d.to}` : ''}`;
     if (e.action === 'assignments.pattern') return `${d.personIds.length} people, ${d.from} to ${d.to}: ${d.pattern.map((x) => x || '-').join(' ')}`;
+    if (e.action.startsWith('holiday.')) return d.year ? `${d.year} ${d.region}: ${d.added} added` : `${d.date}${d.name ? ' ' + d.name : ''}`;
     if (e.action.startsWith('leave.')) return `Request #${d.id}: ${d.start} to ${d.end}`;
     if (e.action === 'user.import') return `${d.created} added, ${d.updated} updated, ${d.accountsCreated} accounts`;
     if (e.action === 'import') return `${d.mode}: ${d.peopleCreated} added, ${d.peopleUpdated} updated, ${d.assignments} duties`;

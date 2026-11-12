@@ -18,6 +18,7 @@ export async function render(root) {
   const start = startOfWeek(today);
   let end = addDays(start, 83);
   let cells = new Map();
+  let hols = {};
   const dayCache = new Map();
 
   root.innerHTML = html`
@@ -36,6 +37,7 @@ export async function render(root) {
 
   async function load() {
     const data = await loadRoster(start, end, { person: me.id });
+    hols = data.publicHolidays || {};
     cells = new Map([...data.cells].filter(([k]) => k.startsWith(me.id + '|')).map(([k, v]) => [k.split('|')[1], v]));
     draw();
   }
@@ -66,7 +68,7 @@ export async function render(root) {
           <button class="day-btn" data-day="${d}" aria-expanded="false">
             <span class="dow">${fmtDate(d, 'dow')}</span><span class="dnum">${dayNum(d)}</span>
             ${a ? chip(a.c) : html`<span class="chip empty">·</span>`}
-            <span class="lbl">${info ? info.label : 'Nothing planned'}${a?.n ? html`<small>${a.n}</small>` : ''}</span>
+            <span class="lbl">${info ? info.label : 'Nothing planned'}${hols[d] ? html` <span class="holiday-tag">${hols[d]}</span>` : ''}${a?.n ? html`<small>${a.n}</small>` : ''}</span>
             <span class="chev" aria-hidden="true">›</span>
           </button>
           <div class="who" hidden></div>

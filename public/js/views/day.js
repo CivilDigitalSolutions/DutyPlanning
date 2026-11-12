@@ -50,6 +50,8 @@ export async function render(root, params) {
 
   function draw() {
     for (const b of root.querySelectorAll('[data-mode]')) b.classList.toggle('btn-primary', b.dataset.mode === mode);
+    const hol = data.publicHolidays?.[date];
+    $('.day-title', root).innerHTML = html`${fmtDate(date, 'long')}${hol ? html` <span class="holiday-tag">${hol}</span>` : ''}`;
     const today = todayIso();
     const people = data.people.filter((p) => !acc || accStatus(p.acc[acc], today) && accStatus(p.acc[acc], today) !== 'expired');
     const codeOf = (p) => data.cells.get(`${p.id}|${date}`)?.c ?? '';

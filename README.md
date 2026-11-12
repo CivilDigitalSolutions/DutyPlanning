@@ -43,8 +43,10 @@ Staff No | Name | Initials | Mobile | [Team] | <accreditation columns…> | 01/1
 | --- | --- | --- |
 | 1. Request | The person (Leave → My leave → Request leave) | Picks dates and a leave type. The form shows how many **working days** come off their allowance (days they're rostered to work, or weekdays where nothing is planned yet), any clash with their other requests, and whether their team would drop below its minimum. |
 | 2. Approve | Their **line manager** (Leave → To approve) | Approves, or rejects with a reason. They see the same day-by-day cover check. If someone has no line manager, an admin or leave administrator approves instead. Nobody can approve their own leave. |
-| 3. Add to roster | A **leave administrator** (Leave → To add to roster) | Chooses the leave code (default AL) and whether to cover rest days, then adds it. Working days get the leave code; rest days and existing leave (e.g. sickness) are left alone. The duties it replaced are remembered. |
+| 3. Add to roster | A **leave administrator** (Leave → To add to roster) | Chooses the leave code (default AL) and checks a preview of every day, then adds it. Working days become **AL**, rest days become **Rest Day - AL** (`RD-AL`), and public holidays become **Public holiday - AL** (`PH-AL`). Existing leave such as sickness is left alone. The duties it replaced are remembered. |
 | Cancel | The person | They can cancel while it's pending or approved. Once it's on the roster they **ask to cancel**, and a leave administrator removes it (their original duties are restored) or keeps it. |
+
+**Public holidays** are kept under Manage → Public holidays. **Add UK bank holidays** fills in a whole year for England and Wales, Scotland or Northern Ireland, including substitute days. One-off holidays (e.g. a coronation) are added by hand. Holidays are highlighted on the plan, Day view and My duties, and don't count against anyone's allowance.
 
 **Set-up:**
 - **Line manager** and **annual leave allowance** are fields on each person. Set them under Manage → People, under Manage → User accounts → Edit, or with the *Line manager email* and *Leave allowance* columns in the bulk import template.

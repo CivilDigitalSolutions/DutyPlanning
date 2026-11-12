@@ -111,6 +111,11 @@ CREATE TABLE IF NOT EXISTS leave_events (
 );
 CREATE INDEX IF NOT EXISTS leave_events_req ON leave_events(request_id);
 
+CREATE TABLE IF NOT EXISTS public_holidays (
+  date TEXT PRIMARY KEY,
+  name TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY,
   at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -132,6 +137,11 @@ export function openDb(file) {
   if (count === 0) {
     const ins = db.prepare('INSERT INTO duty_codes (code,label,category,color,private,sort_order) VALUES (?,?,?,?,?,?)');
     DEFAULT_DUTY_CODES.forEach((d, i) => ins.run(d.code, d.label, d.category, d.color, d.private ? 1 : 0, i));
+  } else {
+    // Existing databases: add the combined codes used when annual leave covers a rest day or public holiday.
+    const order = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM duty_codes').get().m;
+    const add = db.prepare('INSERT OR IGNORE INTO duty_codes (code, label, category, color, private, sort_order) VALUES (?,?,?,?,0,?)');
+    DEFAULT_DUTY_CODES.filter((c) => c.code === 'RD-AL' || c.code === 'PH-AL').forEach((c, i) => add.run(c.code, c.label, c.category, c.color, order + i + 1));
   }
   return db;
 }

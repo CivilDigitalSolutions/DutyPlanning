@@ -24,6 +24,7 @@ import { applyImport, exportWorkbook, parseGrid, readGrid } from './spreadsheet.
 import { parseUserRows, templateCsv, ROLES } from './user-import.js';
 import { applyUserImport, userTemplateWorkbook } from './users-io.js';
 import { registerLeaveRoutes } from './leave.js';
+import { REGIONS, ukBankHolidays } from './holidays.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const MAX_RANGE_DAYS = 400;
@@ -258,7 +259,8 @@ export function createApp(db, config = {}) {
         if (!isPlanner && !own && privateCodes.has(a.c.toLowerCase())) return [a.p, a.d, '*'];
         return a.n && (isPlanner || own) ? [a.p, a.d, a.c, a.n] : [a.p, a.d, a.c];
       });
-    res.json({ from, to, teams: listTeams(), people, assignments });
+    const publicHolidays = Object.fromEntries(db.prepare('SELECT date, name FROM public_holidays WHERE date BETWEEN ? AND ?').all(from, to).map((h) => [h.date, h.name]));
+    res.json({ from, to, teams: listTeams(), people, assignments, publicHolidays });
   });
 
   const validCode = (code) => db.prepare('SELECT code FROM duty_codes WHERE code = ?').get(code)?.code;
@@ -935,6 +937,58 @@ export function createApp(db, config = {}) {
   );
 
   registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, broadcast, cfg });
+
+  // ---------------- Public holidays ----------------
+  app.get('/api/public-holidays', staff, (req, res) => {
+    const from = isValidIso(req.query.from) ? req.query.from : addDays(new Date().toISOString().slice(0, 10), -366);
+    const to = isValidIso(req.query.to) ? req.query.to : addDays(new Date().toISOString().slice(0, 10), 3 * 366);
+    res.json({ holidays: db.prepare('SELECT date, name FROM public_holidays WHERE date BETWEEN ? AND ? ORDER BY date').all(from, to), regions: REGIONS });
+  });
+  app.post(
+    '/api/public-holidays',
+    planner,
+    json,
+    wrap((req, res) => {
+      const date = req.body?.date;
+      const name = s(req.body?.name, 100);
+      if (!isValidIso(date)) throw bad('Choose a date');
+      if (!name) throw bad('Give the holiday a name');
+      db.prepare('INSERT INTO public_holidays (date, name) VALUES (?,?) ON CONFLICT(date) DO UPDATE SET name = excluded.name').run(date, name);
+      audit(db, req.user, 'holiday.save', { date, name });
+      broadcast({ type: 'meta' });
+      res.json({ ok: true });
+    }),
+  );
+  app.delete(
+    '/api/public-holidays/:date',
+    planner,
+    wrap((req, res) => {
+      const r = db.prepare('DELETE FROM public_holidays WHERE date = ?').run(req.params.date);
+      if (!r.changes) throw new HttpError(404, 'Holiday not found');
+      audit(db, req.user, 'holiday.delete', { date: req.params.date });
+      broadcast({ type: 'meta' });
+      res.json({ ok: true });
+    }),
+  );
+  // Add the standard UK bank holidays for a year (existing dates are kept as they are).
+  app.post(
+    '/api/public-holidays/generate',
+    planner,
+    json,
+    wrap((req, res) => {
+      const year = Number(req.body?.year);
+      const region = req.body?.region in REGIONS ? req.body.region : 'england-wales';
+      if (!(Number.isInteger(year) && year >= 2000 && year <= 2100)) throw bad('Choose a year between 2000 and 2100');
+      const ins = db.prepare('INSERT OR IGNORE INTO public_holidays (date, name) VALUES (?,?)');
+      let added = 0;
+      tx(db, () => {
+        for (const h of ukBankHolidays(year, region)) added += ins.run(h.date, h.name).changes;
+        audit(db, req.user, 'holiday.generate', { year, region, added });
+      });
+      broadcast({ type: 'meta' });
+      res.json({ added });
+    }),
+  );
 
   app.get('/healthz', (req, res) => {
     db.prepare('SELECT 1').get();

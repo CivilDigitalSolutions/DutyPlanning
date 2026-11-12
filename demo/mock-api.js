@@ -5,11 +5,12 @@
 import { parseCsv, parseGrid, cellValue, guessCategory, colorFor } from '../server/sheet-parse.js';
 import { daysBetween, eachDate, isValidIso } from '../server/dates.js';
 import { seedDemo } from './seed.js';
+import { REGIONS, ukBankHolidays } from '../server/holidays.js';
 import { parseUserRows, generatePassword, templateCsv, ROLES } from '../server/user-import.js';
-import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, datesToApply, leaveActions, leaveBreakdown, leaveYear, validateRequestDates } from '../server/leave-rules.js';
+import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, leaveYear, validateRequestDates } from '../server/leave-rules.js';
 import { dialog, html, todayIso } from '../public/js/util.js';
 
-const KEY = 'dp-demo-v2';
+const KEY = 'dp-demo-v3';
 const RANK = { staff: 1, planner: 2, admin: 3 };
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -175,7 +176,8 @@ on('GET', '/roster', ({ query }) => {
       if (!planner && !own && priv.has(lc(a.c))) assignments.push([pid, d, '*']);
       else assignments.push(a.n && (planner || own) ? [pid, d, a.c, a.n] : [pid, d, a.c]);
     }
-  return { from, to, teams: listTeams(), people, assignments };
+  const publicHolidays = Object.fromEntries(Object.entries(db.holidays || {}).filter(([d]) => d >= from && d <= to));
+  return { from, to, teams: listTeams(), people, assignments, publicHolidays };
 });
 
 on('PUT', '/assignments', ({ body }) => {
@@ -809,6 +811,7 @@ function breakdown(personId, start, end) {
   const team = db.teams.find((t) => t.id === p?.teamId);
   const mates = p?.teamId ? db.people.filter((x) => x.teamId === p.teamId && x.active) : [];
   return leaveBreakdown({
+    holidayAt: (d) => db.holidays?.[d],
     dates: eachDate(start, end),
     codeAt: (d) => db.asg[`${personId}|${d}`]?.c,
     info: (c) => findCode(c),
@@ -927,15 +930,15 @@ on('POST', '/leave/:id/:action', ({ params, body }) => {
   else if (action === 'apply') {
     const code = findCode(String(body?.code || r.type));
     if (!code || code.category !== 'leave') bad('Choose a leave code to put on the roster');
-    const dates = datesToApply(breakdown(r.personId, r.start, r.end).days, { includeRestDays: !!body?.includeRestDays });
-    r.snapshot = dates.map((d) => [d, db.asg[`${r.personId}|${d}`]?.c ?? null, db.asg[`${r.personId}|${d}`]?.n ?? null]);
-    for (const d of dates) db.asg[`${r.personId}|${d}`] = { c: code.code, n: `Leave request #${r.id}` };
+    const plan = leavePlan(breakdown(r.personId, r.start, r.end).days, code.code, (c) => !!findCode(c));
+    r.snapshot = plan.map((p) => [p.date, db.asg[`${r.personId}|${p.date}`]?.c ?? null, db.asg[`${r.personId}|${p.date}`]?.n ?? null, p.code]);
+    for (const p of plan) db.asg[`${r.personId}|${p.date}`] = { c: p.code, n: `Leave request #${r.id}` };
     Object.assign(r, { status: 'applied', appliedBy: who, appliedAt: new Date().toISOString(), appliedCode: code.code });
-    rosterChanged = dates.length > 0;
+    rosterChanged = plan.length > 0;
   } else if (action === 'remove') {
-    for (const [d, code, prevNote] of r.snapshot || []) {
+    for (const [d, code, prevNote, written] of r.snapshot || []) {
       const k = `${r.personId}|${d}`;
-      if (db.asg[k]?.c !== r.appliedCode) continue;
+      if (db.asg[k]?.c !== (written ?? r.appliedCode)) continue;
       if (code) db.asg[k] = prevNote ? { c: code, n: prevNote } : { c: code };
       else delete db.asg[k];
       rosterChanged = true;
@@ -947,6 +950,52 @@ on('POST', '/leave/:id/:action', ({ params, body }) => {
   if (rosterChanged) changed({ type: 'roster', from: r.start, to: r.end });
   changed({ type: 'leave' });
   return { request: withActs(u)(r) };
+});
+
+// ---------------- Public holidays ----------------
+db.holidays ??= {};
+on('GET', '/public-holidays', ({ query }) => {
+  need('staff');
+  const from = isValidIso(query.from) ? query.from : '0000-00-00';
+  const to = isValidIso(query.to) ? query.to : '9999-12-31';
+  const holidays = Object.entries(db.holidays)
+    .filter(([d]) => d >= from && d <= to)
+    .sort()
+    .map(([date, name]) => ({ date, name }));
+  return { holidays, regions: REGIONS };
+});
+on('POST', '/public-holidays', ({ body }) => {
+  const u = need('planner');
+  if (!isValidIso(body?.date)) bad('Choose a date');
+  const name = s(body?.name, 100);
+  if (!name) bad('Give the holiday a name');
+  db.holidays[body.date] = name;
+  audit(u, 'holiday.save', { date: body.date, name });
+  changed({ type: 'meta' });
+  return { ok: true };
+});
+on('DELETE', '/public-holidays/:date', ({ params }) => {
+  const u = need('planner');
+  if (!db.holidays[params.date]) fail(404, 'Holiday not found');
+  delete db.holidays[params.date];
+  audit(u, 'holiday.delete', { date: params.date });
+  changed({ type: 'meta' });
+  return { ok: true };
+});
+on('POST', '/public-holidays/generate', ({ body }) => {
+  const u = need('planner');
+  const year = Number(body?.year);
+  if (!(Number.isInteger(year) && year >= 2000 && year <= 2100)) bad('Choose a year between 2000 and 2100');
+  const region = body?.region in REGIONS ? body.region : 'england-wales';
+  let added = 0;
+  for (const h of ukBankHolidays(year, region))
+    if (!db.holidays[h.date]) {
+      db.holidays[h.date] = h.name;
+      added++;
+    }
+  audit(u, 'holiday.generate', { year, region, added });
+  changed({ type: 'meta' });
+  return { added };
 });
 
 // ---------------- Public interface (same as public/js/api.js) ----------------

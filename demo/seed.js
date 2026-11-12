@@ -1,6 +1,7 @@
 // Sample data for the standalone demo build (mirrors scripts/seed-demo.js).
 import { addDays, eachDate } from '../server/dates.js';
 import { DEFAULT_DUTY_CODES } from '../server/duty-codes.js';
+import { ukBankHolidays } from '../server/holidays.js';
 
 const FIRST = ['Alex', 'Sam', 'Jordan', 'Chris', 'Taylor', 'Morgan', 'Jamie', 'Robin', 'Casey', 'Drew', 'Avery', 'Riley', 'Quinn', 'Charlie', 'Frankie', 'Harper', 'Jesse', 'Kai', 'Lee', 'Max'];
 const LAST = ['Smith', 'Jones', 'Patel', 'Brown', 'Taylor', 'Wilson', 'Evans', 'Khan', 'Walker', 'Wright', 'Hughes', 'Green', 'Hall', 'Wood', 'Clarke', 'Ahmed', 'Turner', 'Hill', 'Moore', 'Cooper'];
@@ -86,6 +87,8 @@ export function seedDemo(today) {
     { id: nextId(), username: 'planner', password: 'planner1234', role: 'planner', personId: pidOf('1002'), mustChangePassword: false, leaveAdmin: true },
     { id: nextId(), username: '1001', password: 'staff1234', role: 'staff', personId: pidOf('1001'), mustChangePassword: false },
   ];
+  const yr = Number(today.slice(0, 4));
+  db.holidays = Object.fromEntries([...ukBankHolidays(yr), ...ukBankHolidays(yr + 1)].map((h) => [h.date, h.name]));
   // Sample leave requests at each stage.
   db.leave = [];
   db.leaveEvents = [];

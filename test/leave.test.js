@@ -58,15 +58,19 @@ test('full workflow: request, approve, apply, cancel and restore', async () => {
   const pat = await as('pat');
   const gt = await as('gt');
 
+  // Saturday 8 March is made a public holiday (Sam is rostered T1 that day).
+  db.prepare("INSERT INTO public_holidays (date, name) VALUES ('2031-03-08', 'Test holiday')").run();
   const preview = await sam('/leave/preview?start=2031-03-03&end=2031-03-09');
-  assert.equal(preview.body.workingDays, 5);
+  // Mon-Wed and Sun are working days; the rest days and the public holiday are not counted.
+  assert.equal(preview.body.workingDays, 4);
+  assert.equal(preview.body.days[5].publicHoliday, 'Test holiday');
   // Team of 3 on duty Mon, min 2: Sam leaving takes it to 2 - fine.
   assert.equal(preview.body.coverWarnings, 0);
 
   const made = await sam('/leave', { start: '2031-03-03', end: '2031-03-09', type: 'AL', note: 'Holiday' });
   assert.equal(made.status, 200, JSON.stringify(made.body));
   const id = made.body.request.id;
-  assert.equal(made.body.request.days, 5);
+  assert.equal(made.body.request.days, 4);
   assert.equal(made.body.request.status, 'pending');
   assert.equal(made.body.request.managerName, 'Mary Manager');
 
@@ -88,13 +92,15 @@ test('full workflow: request, approve, apply, cancel and restore', async () => {
     '2031-03-03': 'AL:Leave request #' + id,
     '2031-03-04': 'AL:Leave request #' + id,
     '2031-03-05': 'AL:Leave request #' + id,
-    '2031-03-06': 'RD:keep me',
-    '2031-03-07': 'RD',
-    '2031-03-08': 'AL:Leave request #' + id,
+    '2031-03-06': 'RD-AL:Leave request #' + id,
+    '2031-03-07': 'RD-AL:Leave request #' + id,
+    '2031-03-08': 'PH-AL:Leave request #' + id,
     '2031-03-09': 'AL:Leave request #' + id,
   });
+  const labels = Object.fromEntries(db.prepare("SELECT code, label FROM duty_codes WHERE code IN ('RD-AL','PH-AL')").all().map((c) => [c.code, c.label]));
+  assert.deepEqual(labels, { 'RD-AL': 'Rest Day - AL', 'PH-AL': 'Public holiday - AL' });
   const sum = (await sam('/leave/summary?date=2031-06-01')).body.mine;
-  assert.deepEqual(sum, { allowance: 25, booked: 5, pending: 0 });
+  assert.deepEqual(sum, { allowance: 25, booked: 4, pending: 0 });
 
   // A planner changes one leave day before cancellation; that day is left alone on restore.
   db.prepare("UPDATE assignments SET code = 'T2', note = NULL WHERE person_id = 2 AND date = '2031-03-09'").run();
@@ -138,4 +144,24 @@ test('leave rules helpers', () => {
   const a = leaveActions({ personId: 5, managerPersonId: null, status: 'pending' }, { personId: 9, role: 'staff', leaveAdmin: true });
   assert.equal(a.approve, true);
   assert.equal(leaveActions({ personId: 5, managerPersonId: 7, status: 'pending' }, { personId: 9, role: 'staff', leaveAdmin: true }).approve, false);
+});
+
+test('UK bank holidays: calculation and adding them for a year', async () => {
+  const { ukBankHolidays } = await import('../server/holidays.js');
+  assert.deepEqual(
+    ukBankHolidays(2027).map((h) => h.date),
+    ['2027-01-01', '2027-03-26', '2027-03-29', '2027-05-03', '2027-05-31', '2027-08-30', '2027-12-27', '2027-12-28'],
+  );
+  assert.deepEqual(ukBankHolidays(2022).slice(-2).map((h) => [h.date, h.name]), [
+    ['2022-12-26', 'Boxing Day'],
+    ['2022-12-27', 'Christmas Day (substitute day)'],
+  ]);
+  assert.ok(ukBankHolidays(2027, 'scotland').some((h) => h.name.startsWith('St Andrew')));
+  const admin = await as('admin');
+  const sam = await as('sam');
+  assert.equal((await sam('/public-holidays/generate', { year: 2027 })).status, 403);
+  assert.equal((await admin('/public-holidays/generate', { year: 2027 })).body.added, 8);
+  assert.equal((await admin('/public-holidays/generate', { year: 2027 })).body.added, 0, 'no duplicates');
+  const list = (await sam('/public-holidays?from=2027-01-01&to=2027-12-31')).body.holidays;
+  assert.equal(list.length, 8);
 });

@@ -1,7 +1,7 @@
 // Annual leave requests: request -> line manager approval -> leave administrator applies to roster.
 import { tx, audit } from './db.js';
 import { daysBetween, eachDate, isValidIso } from './dates.js';
-import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, datesToApply, leaveActions, leaveBreakdown, leaveYear, validateRequestDates } from './leave-rules.js';
+import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, leaveYear, validateRequestDates } from './leave-rules.js';
 
 export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, broadcast, cfg }) {
   const bad = (m) => new HttpError(400, m);
@@ -10,6 +10,7 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
   const viewerOf = (u) => ({ personId: u.personId, role: u.role, leaveAdmin: u.leaveAdmin });
   const administers = (u) => u.role === 'admin' || u.leaveAdmin;
 
+  const codeExists = (c) => !!db.prepare('SELECT 1 FROM duty_codes WHERE code = ?').get(c);
   const codeInfo = () => new Map(db.prepare('SELECT code, label, category, private FROM duty_codes').all().map((c) => [c.code.toLowerCase(), c]));
   const leaveTypes = () =>
     db.prepare("SELECT code, label FROM duty_codes WHERE category = 'leave' AND private = 0 ORDER BY sort_order, code").all();
@@ -46,7 +47,9 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
         )
         .all(person.team_id, start, end))
         counts.set(r.date, r.n);
+    const hols = new Map(db.prepare('SELECT date, name FROM public_holidays WHERE date BETWEEN ? AND ?').all(start, end).map((h) => [h.date, h.name]));
     return leaveBreakdown({
+      holidayAt: (d) => hols.get(d),
       dates: eachDate(start, end),
       codeAt: (d) => own.get(d),
       info: (c) => info.get(c.toLowerCase()),
@@ -217,33 +220,34 @@ export function registerLeaveRoutes(app, { db, staff, json, wrap, HttpError, bro
           const code = db.prepare("SELECT code FROM duty_codes WHERE code = ? AND category = 'leave'").get(String(req.body?.code || r.type))?.code;
           if (!code) throw bad('Choose a leave code to put on the roster');
           const { days } = breakdownFor(r.personId, r.start, r.end);
-          const dates = datesToApply(days, { includeRestDays: !!req.body?.includeRestDays });
+          const plan = leavePlan(days, code, codeExists);
           const prev = db.prepare('SELECT code, note FROM assignments WHERE person_id = ? AND date = ?');
-          const snapshot = dates.map((d) => {
-            const p = prev.get(r.personId, d);
-            return [d, p?.code ?? null, p?.note ?? null];
+          // [date, previous code, previous note, code written] - used to restore on removal.
+          const snapshot = plan.map(({ date, code: newCode }) => {
+            const p = prev.get(r.personId, date);
+            return [date, p?.code ?? null, p?.note ?? null, newCode];
           });
           const up = db.prepare(
             `INSERT INTO assignments (person_id, date, code, note, updated_at, updated_by) VALUES (?,?,?,?,datetime('now'),?)
              ON CONFLICT(person_id, date) DO UPDATE SET code = excluded.code, note = excluded.note, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
           );
-          for (const d of dates) up.run(r.personId, d, code, `Leave request #${r.id}`, u.id);
+          for (const p of plan) up.run(r.personId, p.date, p.code, `Leave request #${r.id}`, u.id);
           db.prepare("UPDATE leave_requests SET status = 'applied', applied_by = ?, applied_at = datetime('now'), applied_code = ?, applied_snapshot = ? WHERE id = ?").run(
             u.id,
             code,
             JSON.stringify(snapshot),
             r.id,
           );
-          rosterChanged = dates.length > 0;
+          rosterChanged = plan.length > 0;
         } else if (action === 'remove') {
           const row = db.prepare('SELECT applied_code, applied_snapshot FROM leave_requests WHERE id = ?').get(r.id);
           const snapshot = JSON.parse(row.applied_snapshot || '[]');
           const cur = db.prepare('SELECT code FROM assignments WHERE person_id = ? AND date = ?');
           const del = db.prepare('DELETE FROM assignments WHERE person_id = ? AND date = ?');
           const put = db.prepare("UPDATE assignments SET code = ?, note = ?, updated_at = datetime('now'), updated_by = ? WHERE person_id = ? AND date = ?");
-          for (const [d, code, prevNote] of snapshot) {
+          for (const [d, code, prevNote, written] of snapshot) {
             // Only restore days that still show this leave (a planner may have changed them since).
-            if (cur.get(r.personId, d)?.code !== row.applied_code) continue;
+            if (cur.get(r.personId, d)?.code !== (written ?? row.applied_code)) continue;
             if (code) put.run(code, prevNote, u.id, r.personId, d);
             else del.run(r.personId, d);
             rosterChanged = true;

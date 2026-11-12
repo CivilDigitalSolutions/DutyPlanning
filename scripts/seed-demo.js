@@ -7,6 +7,7 @@ import { openDb, tx } from '../server/db.js';
 import { hashPassword } from '../server/auth.js';
 import { addDays, eachDate } from '../server/dates.js';
 import { exportWorkbook } from '../server/spreadsheet.js';
+import { ukBankHolidays } from '../server/holidays.js';
 
 const db = openDb(process.env.DB_FILE || './data/dutyplanning.db');
 const FIRST = ['Alex', 'Sam', 'Jordan', 'Chris', 'Taylor', 'Morgan', 'Jamie', 'Robin', 'Casey', 'Drew', 'Avery', 'Riley', 'Quinn', 'Charlie', 'Frankie', 'Harper', 'Jesse', 'Kai', 'Lee', 'Max'];
@@ -65,6 +66,11 @@ tx(db, () => {
       });
     }
   });
+
+  // England and Wales bank holidays for this year and next.
+  db.exec('DELETE FROM public_holidays');
+  const y = Number(today.slice(0, 4));
+  for (const h of [...ukBankHolidays(y), ...ukBankHolidays(y + 1)]) db.prepare('INSERT OR IGNORE INTO public_holidays (date, name) VALUES (?,?)').run(h.date, h.name);
 
   // Line managers: the first person in each team manages the rest; team leads report to no one (admins approve).
   for (const t of db.prepare('SELECT id FROM teams').all()) {

@@ -69,24 +69,42 @@ const isWeekday = (iso) => {
  * @param info (code) => { category, label }
  * @param teamOnDuty (date) => number of the person's team on a duty that day (including them)
  * @param minStrength team minimum or null
+ * @param holidayAt (date) => public holiday name or null
  * A day counts against the allowance when the person is rostered to work it (duty or
- * training), or - where nothing is planned yet - when it is a weekday.
+ * training), or - where nothing is planned yet - when it is a weekday. Public holidays
+ * and rest days never count.
  */
-export function leaveBreakdown({ dates, codeAt, info, teamOnDuty, minStrength }) {
+export function leaveBreakdown({ dates, codeAt, info, teamOnDuty, minStrength, holidayAt }) {
   const days = dates.map((date) => {
     const code = codeAt(date) || null;
     const category = code ? info(code)?.category || 'other' : null;
-    const working = code ? category === 'duty' || category === 'training' : isWeekday(date);
+    const publicHoliday = (holidayAt && holidayAt(date)) || null;
+    const working = !publicHoliday && (code ? category === 'duty' || category === 'training' : isWeekday(date));
+    const onShift = category === 'duty';
     const onDuty = teamOnDuty ? teamOnDuty(date) : null;
-    const coverLow = working && category === 'duty' && minStrength != null && onDuty != null && onDuty - 1 < minStrength;
-    return { date, code, category, working, teamOnDuty: onDuty, teamAfter: working && category === 'duty' && onDuty != null ? onDuty - 1 : onDuty, coverLow };
+    const coverLow = onShift && minStrength != null && onDuty != null && onDuty - 1 < minStrength;
+    return { date, code, category, publicHoliday, working, teamOnDuty: onDuty, teamAfter: onShift && onDuty != null ? onDuty - 1 : onDuty, coverLow };
   });
   return { days, workingDays: days.filter((d) => d.working).length, coverWarnings: days.filter((d) => d.coverLow).length };
 }
 
-/** Which dates get the leave code when applied. Existing leave (e.g. sickness) is never overwritten. */
-export function datesToApply(days, { includeRestDays = false } = {}) {
-  return days.filter((d) => d.category !== 'leave' && (d.working || includeRestDays)).map((d) => d.date);
+/**
+ * What each day becomes when leave is added to the roster.
+ *   working day      -> the leave code (e.g. AL)
+ *   rest day         -> "RD-<code>"  (Rest Day - AL), if that code exists, otherwise left alone
+ *   public holiday   -> "PH-<code>"  (Public holiday - AL), if that code exists, otherwise the leave code
+ * Days already showing other leave (e.g. sickness) are never overwritten.
+ * @returns [{ date, code }]
+ */
+export function leavePlan(days, code, hasCode) {
+  const out = [];
+  for (const d of days) {
+    if (d.category === 'leave' && !/^(PH|RD)-/i.test(d.code || '')) continue;
+    if (d.publicHoliday) out.push({ date: d.date, code: hasCode(`PH-${code}`) ? `PH-${code}` : code });
+    else if (d.working) out.push({ date: d.date, code });
+    else if (hasCode(`RD-${code}`)) out.push({ date: d.date, code: `RD-${code}` });
+  }
+  return out;
 }
 
 /** Current leave year, given its start as "MM-DD" (default 1 January). */
