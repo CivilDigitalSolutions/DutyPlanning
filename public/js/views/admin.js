@@ -313,8 +313,9 @@ async function lockdowns(body) {
       <td class="actions"><button class="btn btn-sm" data-edit="${l.id}">Edit</button></td></tr>`;
   body.innerHTML = html`
     <div class="toolbar"><h2>Leave lockdowns</h2><span class="spacer"></span><button class="btn btn-primary" data-act="add">Add lockdown</button></div>
-    <p class="muted">During a lockdown, line managers can still approve leave, but only a <b>supervisor</b> or <b>planner</b> can add it to the roster.
-      Lockdowns are shown on people's leave requests and marked on the plan. Tick <b>Supervisor</b> on a user account to let them add lockdown leave.</p>
+    <p class="muted">During a lockdown, line managers can still approve leave, but only a <b>planner supervisor</b> can add it to the roster - not planners or
+      leave administrators. Lockdowns are shown on people's leave requests and marked on the plan. Tick <b>Planner supervisor</b> on the user account of
+      whoever supervises the planners.</p>
     ${current.length
       ? html`<div class="table-wrap"><table class="data"><thead><tr><th>Lockdown</th><th>Dates</th><th>Applies to</th><th></th></tr></thead><tbody>${current.map(row)}</tbody></table></div>`
       : html`<p class="empty-inline">No current or upcoming lockdowns.</p>`}
@@ -514,14 +515,14 @@ async function users(body) {
   };
   const leaveAdminBox = (on, sup) =>
     html`<label class="check span2"><input type="checkbox" name="leaveAdmin" ${on ? 'checked' : ''} /> Leave administrator - adds approved leave to the roster and handles cancellations</label>
-      <label class="check span2"><input type="checkbox" name="supervisor" ${sup ? 'checked' : ''} /> Supervisor - can add leave that falls in a leave lockdown to the roster (planners and admins always can)</label>`;
+      <label class="check span2"><input type="checkbox" name="supervisor" ${sup ? 'checked' : ''} /> Planner supervisor - supervises the planners; the only people who can add leave that falls in a leave lockdown to the roster</label>`;
   body.innerHTML = html`
     <div class="toolbar"><h2>User accounts</h2><span class="spacer"></span>
       <button class="btn" data-act="bulk">Create logins for everyone (${unlinked})</button>
       <button class="btn" data-act="import">Import users</button>
       <button class="btn btn-primary" data-act="add">Add user</button></div>
     <p class="muted">People sign in with their email address or staff number. To add many new people at once, use <b>Import users</b> with the template. Planners can edit the plan; admins can also manage accounts. Linking an account to a person shows them "My duties".</p>
-    <div class="table-wrap"><table class="data"><thead><tr><th>Username</th><th>Role</th><th>Person</th><th>Line manager</th><th>Leave admin</th><th>Supervisor</th><th>Status</th><th></th></tr></thead>
+    <div class="table-wrap"><table class="data"><thead><tr><th>Username</th><th>Role</th><th>Person</th><th>Line manager</th><th>Leave admin</th><th>Planner supervisor</th><th>Status</th><th></th></tr></thead>
     <tbody>${list.map(
       (u) => html`<tr><td>${u.username}</td><td>${u.role}</td><td>${u.personName || html`<span class="muted">–</span>`}</td>
         <td>${managerName(u.personId)}</td><td>${u.leaveAdmin ? 'Yes' : ''}</td><td>${u.supervisor ? 'Yes' : ''}</td>

@@ -118,7 +118,7 @@ export function registerLeaveRoutes(app, { db, staff, planner, json, wrap, HttpE
       where = '(p.line_manager_id = ?' + (administers(u) ? ' OR p.line_manager_id IS NULL' : '') + ') AND r.person_id IS NOT ?';
       args = [u.personId ?? -1, u.personId ?? -1];
     } else if (scope === 'apply') {
-      if (!administers(u) && !canRosterLockdown(u)) throw new HttpError(403, 'Only leave administrators, planners and supervisors can do this');
+      if (!administers(u) && !canRosterLockdown(u)) throw new HttpError(403, 'Only leave administrators and planner supervisors can do this');
       where = "r.status IN ('approved','cancel_requested','applied')";
     } else if (scope === 'all') {
       if (!(u.role === 'planner' || administers(u))) throw new HttpError(403, 'Not permitted');
@@ -208,7 +208,7 @@ export function registerLeaveRoutes(app, { db, staff, planner, json, wrap, HttpE
       const r = withActions(u)(found);
       if (!r.actions[action]) {
         if (action === 'apply' && r.actions.needsSupervisor)
-          throw new HttpError(403, `This leave falls in a leave lockdown (${r.lockdowns.map((l) => l.name).join(', ')}) - only a supervisor or planner can add it to the roster`);
+          throw new HttpError(403, `This leave falls in a leave lockdown (${r.lockdowns.map((l) => l.name).join(', ')}) - only a planner supervisor can add it to the roster`);
         throw new HttpError(403, 'You cannot do that to this request now');
       }
       const note = s(req.body?.note, 500) || null;

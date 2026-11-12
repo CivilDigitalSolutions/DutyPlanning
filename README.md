@@ -46,14 +46,14 @@ Staff No | Name | Initials | Mobile | [Team] | <accreditation columns…> | 01/1
 | 3. Add to roster | A **leave administrator** (Leave → To add to roster) | Chooses the leave code (default AL) and checks a preview of every day, then adds it. Working days become **AL**, rest days become **Rest Day - AL** (`RD-AL`), and public holidays become **Public holiday - AL** (`PH-AL`). Existing leave such as sickness is left alone. The duties it replaced are remembered. |
 | Cancel | The person | They can cancel while it's pending or approved. Once it's on the roster they **ask to cancel**, and a leave administrator removes it (their original duties are restored) or keeps it. |
 
-**Leave lockdowns** (Manage → Leave lockdowns) are periods when leave needs extra control, such as a major operation. They can cover all teams or one team. During a lockdown, line managers can still approve leave, but **only a supervisor or a planner** (planners, admins, and accounts with the **Supervisor** tick box) can add it to the roster. Ordinary leave administrators see "needs a supervisor or planner" instead of the button. Lockdowns are shown on the request form, on each request and its day-by-day breakdown, and as a red edge on the plan's date headers.
+**Leave lockdowns** (Manage → Leave lockdowns) are periods when leave needs extra control, such as a major operation. They can cover all teams or one team. During a lockdown, line managers can still approve leave, but **only someone who supervises the planners** (an account with the **Planner supervisor** tick box) can add it to the roster. Planners, admins and leave administrators can't; they see "needs a planner supervisor" instead of the button. Lockdowns are shown on the request form, on each request and its day-by-day breakdown, and as a red edge on the plan's date headers.
 
 **Public holidays** are kept under Manage → Public holidays. **Add UK bank holidays** fills in a whole year for England and Wales, Scotland or Northern Ireland, including substitute days. One-off holidays (e.g. a coronation) are added by hand. Holidays are highlighted on the plan, Day view and My duties, and aren't counted as working days of leave.
 
 **Set-up:**
 - **Line manager** is a field on each person. Set it under Manage → People, under Manage → User accounts → Edit, or with the *Line manager email* column in the bulk import template.
 - **Leave administrator** is a tick box on each user account (Manage → User accounts → Edit). Use it for whoever applies leave to the roster. Admins can always do it.
-- **Supervisor** is another tick box on user accounts. It lets someone add leave that falls in a lockdown to the roster.
+- **Planner supervisor** is another tick box on user accounts, for whoever supervises the planners. Only they can add leave that falls in a lockdown to the roster. Admins can tick it on their own account if they need to.
 - The **Leave** tab shows a badge with the number of requests waiting for you. Every step is recorded on the request's history and in the activity log.
 
 ## Bulk importing new users
@@ -112,6 +112,20 @@ npm run build:demo        # -> dist/duty-planning-demo.html
 ```
 
 This produces one self-contained HTML file that runs the whole app in the browser with sample data and no server. The API is swapped for an in-browser mock (`demo/mock-api.js`) that applies the same rules, and data is saved in that browser's local storage. Use it to share a preview. File downloads (Excel export, calendar file), live updates and offline caching are switched off in this build.
+
+### Demo on GitHub Pages (proof of concept)
+
+`.github/workflows/pages.yml` runs the tests, builds the standalone demo (`dist/pages/`) and publishes it to GitHub Pages on every push to `main` or the development branch.
+
+1. **Turn on Pages once:** repository **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+2. **Publish:** push, or run the *Deploy demo to GitHub Pages* workflow from the Actions tab.
+3. **Share the link:** `https://<owner>.github.io/<repository>/`, also shown on the workflow run.
+
+The demo runs entirely in the visitor's browser with sample teams; no server or real data is involved. Visitors pick Planner, Staff member or Admin on the sign-in screen. Their changes stay in their own browser, and the account menu has *Reset demo data*. It can be added to a phone's home screen and opens offline after the first visit. File downloads (Excel export, calendar file) are switched off in the demo.
+
+Things to know:
+- **The site is public** and readable by anyone with the link, even from a private repository. Only GitHub Enterprise Cloud can restrict Pages access. It's marked `noindex` so search engines shouldn't list it.
+- Pages on a **private** repository needs a paid GitHub plan (Pro, Team or Enterprise).
 
 ## Deploying to AWS (EC2)
 

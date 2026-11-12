@@ -25,8 +25,8 @@ export function lockdownsFor(lockdowns, teamId, start, end) {
   return lockdowns.filter((l) => l.start <= end && l.end >= start && (l.teamId == null || l.teamId === teamId));
 }
 
-/** Only planners, admins and supervisors may add leave that falls in a lockdown to the roster. */
-export const canRosterLockdown = (viewer) => viewer.role === 'planner' || viewer.role === 'admin' || !!viewer.supervisor;
+/** Only someone who supervises the planners (an account marked "Planner supervisor") may add leave in a lockdown to the roster. */
+export const canRosterLockdown = (viewer) => !!viewer.supervisor;
 
 /**
  * What the viewer may do with a request.
@@ -45,7 +45,7 @@ export function leaveActions(req, viewer) {
     // Nobody approves their own leave.
     approve: s === 'pending' && !isOwner && (isManager || isAdmin || (req.managerPersonId == null && administers)),
     reject: s === 'pending' && !isOwner && (isManager || isAdmin || (req.managerPersonId == null && administers)),
-    // In a lockdown, approved leave waits for a planner, admin or supervisor (not the person themselves).
+    // In a lockdown, approved leave waits for a planner supervisor (not the person themselves).
     apply: s === 'approved' && (locked ? canRosterLockdown(viewer) && !isOwner : administers),
     // Shown to leave administrators so they know why they can't add it.
     needsSupervisor: s === 'approved' && locked && !(canRosterLockdown(viewer) && !isOwner),

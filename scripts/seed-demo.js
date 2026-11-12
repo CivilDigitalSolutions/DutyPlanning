@@ -118,11 +118,11 @@ tx(db, () => {
   user('planner', 'planner1234', 'planner', db.prepare("SELECT id FROM people WHERE staff_number='1002'").get().id);
   db.prepare("UPDATE users SET leave_admin = 1 WHERE username = 'planner'").run();
   user('1001', 'staff1234', 'staff', db.prepare("SELECT id FROM people WHERE staff_number='1001'").get().id);
-  db.prepare("UPDATE users SET supervisor = 1 WHERE username = '1001'").run();
+  db.prepare("UPDATE users SET supervisor = 1 WHERE username = 'admin'").run();
 });
 
 console.log(`Demo data loaded for ${from} to ${to}.`);
-console.log('Logins: admin/admin1234 (admin), planner/planner1234 (planner + leave administrator), 1001/staff1234 (staff, manages Team 1, supervisor)');
+console.log('Logins: admin/admin1234 (admin + planner supervisor), planner/planner1234 (planner + leave administrator), 1001/staff1234 (staff, manages Team 1)');
 
 const xi = process.argv.indexOf('--xlsx');
 if (xi > 0) {

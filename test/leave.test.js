@@ -163,7 +163,7 @@ test('UK bank holidays: calculation and adding them for a year', async () => {
   assert.equal(list.length, 8);
 });
 
-test('leave lockdowns: approval allowed, but only a supervisor or planner can add it to the roster', async () => {
+test('leave lockdowns: approval allowed, but only a planner supervisor can add it to the roster', async () => {
   const pat = await as('pat');
   db.prepare("INSERT INTO users (username, password_hash, role) VALUES ('plan', ?, 'planner')").run(pw);
   db.prepare("INSERT INTO users (username, password_hash, role, supervisor) VALUES ('sue', ?, 'staff', 1)").run(pw);
@@ -202,9 +202,13 @@ test('leave lockdowns: approval allowed, but only a supervisor or planner can ad
   assert.deepEqual(r2.lockdowns, []);
   await mary(`/leave/${r2.id}/approve`, {});
   assert.equal((await gt(`/leave/${r2.id}/apply`, {})).body.request.status, 'applied');
+  // Planners and admins cannot add lockdown leave - only the planner supervisor.
+  const admin = await as('admin');
   const r3 = (await pat('/leave', { start: '2031-05-02', end: '2031-05-02' })).body.request;
   await mary(`/leave/${r3.id}/approve`, {});
-  assert.equal((await plan(`/leave/${r3.id}/apply`, {})).body.request.status, 'applied');
+  assert.equal((await plan(`/leave/${r3.id}/apply`, {})).status, 403, 'planner refused');
+  assert.equal((await admin(`/leave/${r3.id}/apply`, {})).status, 403, 'admin refused');
+  assert.equal((await sue(`/leave/${r3.id}/apply`, {})).body.request.status, 'applied');
 
   const lockdowns = (await sam('/lockdowns')).body.lockdowns;
   assert.equal(lockdowns.length, 2);

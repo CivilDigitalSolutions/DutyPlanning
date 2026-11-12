@@ -82,9 +82,9 @@ export function seedDemo(today) {
     for (const m of members.slice(1)) m.lineManagerId = members[0].id;
   }
   db.users = [
-    { id: nextId(), username: 'admin', password: 'admin1234', role: 'admin', personId: null, mustChangePassword: false },
+    { id: nextId(), username: 'admin', password: 'admin1234', role: 'admin', personId: null, mustChangePassword: false, supervisor: true },
     { id: nextId(), username: 'planner', password: 'planner1234', role: 'planner', personId: pidOf('1002'), mustChangePassword: false, leaveAdmin: true },
-    { id: nextId(), username: '1001', password: 'staff1234', role: 'staff', personId: pidOf('1001'), mustChangePassword: false, supervisor: true },
+    { id: nextId(), username: '1001', password: 'staff1234', role: 'staff', personId: pidOf('1001'), mustChangePassword: false },
   ];
   const yr = Number(today.slice(0, 4));
   db.holidays = Object.fromEntries([...ukBankHolidays(yr), ...ukBankHolidays(yr + 1)].map((h) => [h.date, h.name]));

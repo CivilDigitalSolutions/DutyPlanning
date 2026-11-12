@@ -84,9 +84,9 @@ function lockdownNote(r) {
   const names = r.lockdowns.map((l) => l.name).join(', ');
   return html`<div class="lock-note">🔒 In leave lockdown: <b>${names}</b>${
     r.actions.needsSupervisor
-      ? html` - <span>needs a supervisor or planner to add it to the roster</span>`
+      ? html` - <span>needs a planner supervisor to add it to the roster</span>`
       : r.status === 'pending' || r.status === 'approved'
-        ? html` - only a supervisor or planner can add it to the roster`
+        ? html` - only a planner supervisor can add it to the roster`
         : ''
   }</div>`;
 }
@@ -282,7 +282,7 @@ function requestDialog(sum, refresh) {
           : ''}
         ${p.lockdowns?.length
           ? html`<div class="lock-box"><b>🔒 Leave lockdown:</b> ${p.lockdowns.map((l) => `${l.name} (${range(l)})`).join('; ')}.
-              Your manager can still approve this, but only a supervisor or planner can add it to the roster.</div>`
+              Your manager can still approve this, but only a planner supervisor can add it to the roster.</div>`
           : ''}
         ${p.overlaps.length ? html`<p class="error">This overlaps your request for ${p.overlaps.map(range).join(', ')}.</p>` : ''}
         ${p.coverWarnings ? html`<p class="warn-text">Your team would be below its minimum on ${plural(p.coverWarnings, 'day')} - your manager will see this.</p>` : ''}

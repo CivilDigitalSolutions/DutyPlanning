@@ -10,7 +10,7 @@ import { parseUserRows, generatePassword, templateCsv, ROLES } from '../server/u
 import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, validateRequestDates, lockdownsFor, canRosterLockdown } from '../server/leave-rules.js';
 import { dialog, html, todayIso } from '../public/js/util.js';
 
-const KEY = 'dp-demo-v5';
+const KEY = 'dp-demo-v6';
 const RANK = { staff: 1, planner: 2, admin: 3 };
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -852,7 +852,7 @@ on('GET', '/leave', ({ query }) => {
   if (scope === 'mine') list = db.leave.filter((r) => r.personId === u.personId);
   else if (scope === 'approve') list = db.leave.filter((r) => r.personId !== u.personId && ((u.personId != null && mgrOf(r) === u.personId) || (administers(u) && mgrOf(r) == null)));
   else if (scope === 'apply') {
-    if (!administers(u) && !canRosterLockdown(u)) fail(403, 'Only leave administrators, planners and supervisors can do this');
+    if (!administers(u) && !canRosterLockdown(u)) fail(403, 'Only leave administrators and planner supervisors can do this');
     list = db.leave.filter((r) => ['approved', 'cancel_requested', 'applied'].includes(r.status));
   } else if (scope === 'all') {
     if (!(u.role === 'planner' || administers(u))) fail(403, 'Not permitted');
@@ -921,7 +921,7 @@ on('POST', '/leave/:id/:action', ({ params, body }) => {
   const view = withActs(u)(r);
   if (!view.actions[action]) {
     if (action === 'apply' && view.actions.needsSupervisor)
-      fail(403, `This leave falls in a leave lockdown (${view.lockdowns.map((l) => l.name).join(', ')}) - only a supervisor or planner can add it to the roster`);
+      fail(403, `This leave falls in a leave lockdown (${view.lockdowns.map((l) => l.name).join(', ')}) - only a planner supervisor can add it to the roster`);
     fail(403, 'You cannot do that to this request now');
   }
   const note = s(body?.note, 500) || null;
