@@ -12,7 +12,7 @@ import { dialog, html, todayIso, toast, addDays } from '../public/js/util.js';
 import { buildPlanWorkbook, buildUserTemplate } from '../server/workbooks.js';
 import { buildIcs } from '../server/ics.js';
 
-const KEY = 'dp-demo-v7';
+const KEY = 'dp-demo-v9';
 const RANK = { staff: 1, planner: 2, admin: 3 };
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -83,7 +83,12 @@ function need(role) {
 const findCode = (code) => db.codes.find((c) => lc(c.code) === lc(code));
 const sortBy = (arr, ...keys) => [...arr].sort((a, b) => keys.reduce((r, k) => r || (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0), 0));
 const listTeams = () =>
-  sortBy(db.teams, 'sortOrder', 'name').map((t) => ({ ...t, strength: db.people.filter((p) => p.teamId === t.id && p.active).length }));
+  sortBy(db.teams, 'sortOrder', 'name').map((t) => {
+    const members = db.people.filter((p) => p.teamId === t.id && p.active);
+    const leader = members.find((p) => p.teamRole === 'leader');
+    const sups = members.filter((p) => p.teamRole === 'supervisor');
+    return { ...t, strength: members.length, leaderId: leader?.id ?? null, leaderName: leader?.name ?? null, supervisorNames: sups.length ? sups.map((p) => p.name).join(', ') : null };
+  });
 const listCodes = () => sortBy(db.codes, 'sortOrder', 'code');
 const listAccs = () => sortBy(db.accs, 'sortOrder', 'name');
 const unique = (list, key, val, exceptId, msg) => {
@@ -159,7 +164,7 @@ on('GET', '/roster', ({ query }) => {
     'sortOrder',
     'name',
   ).map((p) => {
-    const out = { id: p.id, staffNumber: p.staffNumber, name: p.name, initials: p.initials, mobile: p.mobile, email: p.email, teamId: p.teamId, sortOrder: p.sortOrder, acc: db.pacc[p.id] || {} };
+    const out = { id: p.id, staffNumber: p.staffNumber, name: p.name, initials: p.initials, mobile: p.mobile, email: p.email, teamId: p.teamId, teamRole: p.teamRole || null, sortOrder: p.sortOrder, acc: db.pacc[p.id] || {} };
     if (p.jobTitle) out.jobTitle = p.jobTitle;
     const canSee = planner || p.id === mine?.id || (mine?.teamId && mine.teamId === p.teamId);
     if (!canSee) {
@@ -245,6 +250,21 @@ on('POST', '/assignments/pattern', ({ body }) => {
   return { ok: true, count };
 });
 
+on('PUT', '/teams/:id/roles', ({ body, params }) => {
+  const u = need('planner');
+  const teamId = Number(params.id);
+  if (!db.teams.some((t) => t.id === teamId)) fail(404, 'Team not found');
+  const members = db.people.filter((p) => p.teamId === teamId);
+  const leaderId = body?.leaderId == null || body.leaderId === '' ? null : Number(body.leaderId);
+  const supervisorIds = [...new Set((body?.supervisorIds || []).map(Number))];
+  for (const id of [leaderId, ...supervisorIds].filter((x) => x != null)) if (!members.some((p) => p.id === id)) bad('Team leader and supervisors must be members of the team');
+  if (leaderId != null && supervisorIds.includes(leaderId)) bad('The team leader cannot also be a supervisor');
+  for (const p of members) p.teamRole = p.id === leaderId ? 'leader' : supervisorIds.includes(p.id) ? 'supervisor' : null;
+  audit(u, 'team.roles', { id: teamId, leaderId, supervisorIds });
+  changed({ type: 'meta' });
+  return { ok: true };
+});
+
 // Teams
 const teamBody = (b) => {
   const name = s(b.name, 100);
@@ -313,6 +333,16 @@ const checkManager = (v, selfId) => {
   if (mid != null && mid === selfId) bad('Someone cannot be their own line manager');
   return mid;
 };
+const teamRoleOf = (v) => {
+  if (v == null || v === '') return null;
+  if (!['leader', 'supervisor'].includes(v)) bad('Team role must be team leader, supervisor or none');
+  return v;
+};
+// A team has one team leader: making someone leader steps the previous one down.
+const oneLeader = (pid) => {
+  const p = db.people.find((x) => x.id === pid);
+  if (p?.teamRole === 'leader' && p.teamId) for (const o of db.people) if (o.id !== pid && o.teamId === p.teamId && o.teamRole === 'leader') o.teamRole = null;
+};
 const personBody = (b, selfId = null) => {
   const staffNumber = s(b.staffNumber, 50);
   const name = s(b.name, 150);
@@ -338,6 +368,7 @@ const personBody = (b, selfId = null) => {
     jobTitle: s(b.jobTitle, 100) || null,
     startDate,
     lineManagerId: checkManager(b.lineManagerId, selfId),
+    teamRole: teamId == null ? null : teamRoleOf(b.teamRole),
   };
 };
 on('POST', '/people', ({ body }) => {
@@ -347,6 +378,7 @@ on('POST', '/people', ({ body }) => {
   if (p.email) unique(db.people, 'email', p.email, null, 'That email is already used by someone else');
   const id = nextId();
   db.people.push({ id, ...p });
+  oneLeader(id);
   audit(u, 'person.create', { id, staffNumber: p.staffNumber });
   changed({ type: 'meta' });
   return { id };
@@ -358,6 +390,7 @@ on('PUT', '/people/:id', ({ body, params }) => {
   unique(db.people, 'staffNumber', v.staffNumber, p.id, 'That staff number already exists');
   if (v.email) unique(db.people, 'email', v.email, p.id, 'That email is already used by someone else');
   Object.assign(p, v);
+  oneLeader(p.id);
   audit(u, 'person.update', { id: p.id });
   changed({ type: 'meta' });
   return { ok: true };
@@ -754,6 +787,13 @@ on('POST', '/users/import', async ({ body, query, headers }) => {
       summary.accountsCreated++;
       if (!password) summary.credentials.push({ email: r.email, name: r.name, password: pw });
     }
+  }
+  for (const r of parsed.rows) {
+    if (r.action === 'error' || r.action === 'skip' || !r.teamRole) continue;
+    const p = byEmail(r.email);
+    if (!p) continue;
+    p.teamRole = r.teamRole;
+    oneLeader(p.id);
   }
   summary.managersNotFound = [];
   for (const r of parsed.rows) {

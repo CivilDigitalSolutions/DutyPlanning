@@ -80,6 +80,19 @@ export function seedDemo(today) {
   for (const t of db.teams) {
     const members = db.people.filter((p) => p.teamId === t.id).sort((a, b) => a.sortOrder - b.sortOrder);
     for (const m of members.slice(1)) m.lineManagerId = members[0].id;
+    if (members[0]) members[0].teamRole = 'leader';
+    for (const m of members.slice(1, 3)) m.teamRole = 'supervisor';
+  }
+  {
+    const t3 = db.teams.find((t) => t.name === 'Team 3').id;
+    const leads = db.people.filter((p) => p.teamId === t3 && p.teamRole);
+    for (let i = 3; i < 25; i++) {
+      const d = addDays(today, i);
+      if (leads.every((p) => db.asg[`${p.id}|${d}`]?.c === 'T3')) {
+        for (const p of leads) db.asg[`${p.id}|${d}`] = { c: 'AL' };
+        break;
+      }
+    }
   }
   db.users = [
     { id: nextId(), username: 'admin', password: 'admin1234', role: 'admin', personId: null, mustChangePassword: false, supervisor: true },

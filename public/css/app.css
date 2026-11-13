@@ -21,6 +21,10 @@
   --ph-bg: rgba(122, 63, 184, 0.09);
   --lock: #b42318;
   --lock-bg: rgba(180, 35, 24, 0.08);
+  --role-leader: #8a5a00;
+  --role-leader-bg: #fff3d6;
+  --role-sup: #1f4e79;
+  --role-sup-bg: #e3edf7;
   --radius: 10px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
   --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.18);
@@ -36,6 +40,10 @@
     --ph-bg: rgba(195, 155, 240, 0.12);
     --lock: #f97066;
     --lock-bg: rgba(249, 112, 102, 0.12);
+    --role-leader: #f5c56b;
+    --role-leader-bg: #3a2c10;
+    --role-sup: #8fbfe8;
+    --role-sup-bg: #1d3247;
     --bg: #0f1720;
     --surface: #17212c;
     --surface-2: #1c2834;
@@ -56,6 +64,10 @@
   --ph-bg: rgba(195, 155, 240, 0.12);
   --lock: #f97066;
   --lock-bg: rgba(249, 112, 102, 0.12);
+  --role-leader: #f5c56b;
+  --role-leader-bg: #3a2c10;
+  --role-sup: #8fbfe8;
+  --role-sup-bg: #1d3247;
   --bg: #0f1720;
   --surface: #17212c;
   --surface-2: #1c2834;
@@ -1776,4 +1788,56 @@ td.hol-date {
 }
 .grid thead tr th.d.ph.td span {
   color: #fff;
+}
+
+/* Team positions */
+.role {
+  display: inline-grid;
+  place-items: center;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  flex: none;
+  border: 1px solid currentColor;
+}
+.role-leader {
+  color: var(--role-leader);
+  background: var(--role-leader-bg);
+}
+.role-sup {
+  color: var(--role-sup);
+  background: var(--role-sup-bg);
+}
+.grid .linkish .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.grid tr.r-leader .name {
+  font-weight: 700;
+}
+.team-roles {
+  color: var(--role-leader);
+  font-weight: 700;
+}
+.grid td.cnt.nosup {
+  box-shadow: inset 0 -3px 0 var(--warn);
+}
+.who-list .role {
+  margin-left: 2px;
+}
+
+.in-charge {
+  margin: -4px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sup-picks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 4px 12px;
 }

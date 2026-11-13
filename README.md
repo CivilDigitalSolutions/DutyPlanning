@@ -10,6 +10,7 @@ A Progressive Web App (PWA) that replaces the duty-planning spreadsheet. It work
 | Area | What it does |
 | --- | --- |
 | Plan grid | Teams grouped with establishment, filled posts and vacancies. Sticky names and dates. Weekend and today highlighting. Per-team and total on-duty counts, shown in red when a team drops below its minimum. Filter by team, name or staff number, or accreditation. You can show or hide staff numbers, accreditation columns and vacant rows. The grid shows 1 to 13 weeks at a time. |
+| Team positions | Each team can have one **team leader** (senior to supervisors) and any number of **supervisors**. Set them under Manage → Teams → Edit, on a person's record (*Team position*), or with the *Team position* column in the bulk user import. On the plan they're listed first in their team with **TL** / **SUP** badges, the team header names the team leader, and a team's daily count is underlined in amber on days the team is working with no team leader or supervisor on duty. The Day view shows who is in charge of each team. |
 | Editing (planners) | Click or drag to select cells, then tap a duty code in the palette. You can also type a code (`RD`, `T1`, `AL` …), and arrow keys move around the grid. Copy and paste works with Excel (tab-separated), and Ctrl+Z undoes changes. Planners can add notes to cells and apply repeating rota patterns to a team or the selected rows, optionally staggered per person. |
 | My duties | Phone-first list of your coming weeks: today, next duty, next rest day, and leave and training counts. Tap a day to see who else is on and what your team is doing, with tap-to-call. Download your duties as a calendar file (`.ics`). |
 | Annual leave | Staff request leave from the app and track where each request is up to. Their **line manager** approves or rejects it. A **leave administrator** then adds approved leave to the roster, and cancellations are handled the same way. See below. |
@@ -87,6 +88,7 @@ Under **Manage → User accounts → Import users** (admins only):
    | Job title | Rank, grade or job title. |
    | Start date | dd/mm/yyyy (or choose month/day order when uploading). |
    | Line manager email | The person who approves their leave. They can be elsewhere in the same file. |
+   | Team position | `team leader` or `supervisor`; blank for a team member. One team leader per team. |
    | App role | `staff` (default), `planner` or `admin`. |
    | One column per accreditation | `Y` if held, or the expiry date. |
 

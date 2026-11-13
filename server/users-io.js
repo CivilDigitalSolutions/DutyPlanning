@@ -125,6 +125,16 @@ export function applyUserImport(db, parsed, { createTeams = true, updateExisting
     }
     summary.managersNotFound = [...new Set(summary.managersNotFound)];
 
+    // Team positions: set where given; a new team leader steps the previous one down.
+    for (const row of parsed.rows) {
+      if (row.errors.length || !row.teamRole) continue;
+      const p = findByEmail.get(row.email);
+      if (!p) continue;
+      const teamId = db.prepare('SELECT team_id FROM people WHERE id = ?').get(p.id).team_id;
+      if (row.teamRole === 'leader') db.prepare("UPDATE people SET team_role = NULL WHERE team_id = ? AND team_role = 'leader' AND id <> ?").run(teamId, p.id);
+      db.prepare('UPDATE people SET team_role = ? WHERE id = ?').run(row.teamRole, p.id);
+    }
+
     // Keep establishment at least as large as the number of people, so new starters fill vacancies.
     for (const id of touchedTeams) {
       const n = db.prepare('SELECT COUNT(*) AS n FROM people WHERE team_id = ? AND active = 1').get(id).n;

@@ -192,8 +192,8 @@ export async function render(root) {
     const teams = data.teams.filter((t) => !v.teams.length || v.teams.includes(t.id));
     const known = new Set(data.teams.map((t) => t.id));
     const out = teams.map((t) => {
-      const all = data.people.filter((p) => p.teamId === t.id);
-      return { team: t, people: all.filter(matches), vacancies: Math.max(0, t.establishment - all.length) };
+      const all = byRole(data.people.filter((p) => p.teamId === t.id));
+      return { team: t, people: all.filter(matches), members: all, vacancies: Math.max(0, t.establishment - all.length) };
     });
     if (!v.teams.length) {
       const orphans = data.people.filter((p) => !known.has(p.teamId)).filter(matches);
@@ -202,6 +202,40 @@ export async function render(root) {
     const filtered = v.q || v.acc;
     return out.filter((g) => !filtered || g.people.length);
   }
+
+  // Team leader first, then supervisors, then everyone else (keeping their order).
+  const ROLE_RANK = { leader: 0, supervisor: 1 };
+  const byRole = (list) => [...list].sort((a, b) => (ROLE_RANK[a.teamRole] ?? 2) - (ROLE_RANK[b.teamRole] ?? 2));
+  const roleBadge = (p) =>
+    p.teamRole === 'leader'
+      ? '<span class="role role-leader" title="Team leader">TL</span>'
+      : p.teamRole === 'supervisor'
+        ? '<span class="role role-sup" title="Supervisor">SUP</span>'
+        : '';
+  /** On-duty count for a team on a date, and whether its team leader / a supervisor is on duty. */
+  function teamDay(g, d) {
+    let n = 0;
+    let leader = false;
+    let sups = 0;
+    for (const p of g.members || g.people) {
+      if (!onDuty(data.cells.get(`${p.id}|${d}`)?.c ?? '')) continue;
+      if (g.people.includes(p)) n++;
+      if (p.teamRole === 'leader') leader = true;
+      if (p.teamRole === 'supervisor') sups++;
+    }
+    const hasRoles = (g.members || g.people).some((p) => p.teamRole);
+    return { n, leader, sups, noSupervision: hasRoles && n > 0 && !leader && !sups };
+  }
+  const countTitle = (t, x, locked) =>
+    [
+      `${x.n} on duty${t.minStrength != null ? ` (minimum ${t.minStrength})` : ''}`,
+      x.leader ? 'Team leader on duty' : null,
+      x.sups ? `${x.sups} supervisor${x.sups > 1 ? 's' : ''} on duty` : null,
+      x.noSupervision ? 'No team leader or supervisor on duty' : null,
+      locked ? 'Leave lockdown for this team' : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
 
   function cellHtml(p, d, r, c) {
     const a = data.cells.get(`${p.id}|${d}`);
@@ -257,21 +291,26 @@ export async function render(root) {
     for (const g of groups()) {
       drawnGroups.push(g);
       const t = g.team;
-      const counts = dates.map((d) => g.people.reduce((n, p) => n + (onDuty(data.cells.get(`${p.id}|${d}`)?.c ?? '') ? 1 : 0), 0));
+      const days = dates.map((d) => teamDay(g, d));
+      const counts = days.map((x) => x.n);
       counts.forEach((n, ci) => (totals[ci] += n));
+      const leader = g.members?.find((p) => p.teamRole === 'leader');
+      const sups = (g.members || []).filter((p) => p.teamRole === 'supervisor');
+      const roleLine = [leader ? `TL ${leader.initials || leader.name}` : null, sups.length ? `${sups.length} SUP` : null].filter(Boolean).join(' · ');
+      const roleTitle = [leader ? `Team leader: ${leader.name}` : 'No team leader set', sups.length ? `Supervisors: ${sups.map((p) => p.name).join(', ')}` : 'No supervisors set'].join('\n');
       const allMembers = data.people.filter((p) => p.teamId === t.id).length;
-      body += `<tbody class="team"><tr class="team-row"><th class="name" scope="rowgroup"><div class="team-name">${esc(t.name)}</div><div class="team-meta">${allMembers}${t.establishment ? `/${t.establishment}` : ''}${g.vacancies ? ` · <span class="vac">${g.vacancies} vacant</span>` : ''}</div></th>`;
+      body += `<tbody class="team"><tr class="team-row"><th class="name" scope="rowgroup"><div class="team-name" title="${esc(roleTitle)}">${esc(t.name)}</div><div class="team-meta">${allMembers}${t.establishment ? `/${t.establishment}` : ''}${g.vacancies ? ` · <span class="vac">${g.vacancies} vacant</span>` : ''}${roleLine ? ` · <span class="team-roles">${esc(roleLine)}</span>` : ''}</div></th>`;
       if (fixed > 1) body += `<td class="fx" colspan="${fixed - 1}"></td>`;
       counts.forEach((n, ci) => {
         const low = t.minStrength != null && n < t.minStrength;
         const teamLocked = (data.lockdowns || []).some((l) => l.teamId === t.id && l.start <= dates[ci] && l.end >= dates[ci]);
-        body += `<td class="cnt${low ? ' low' : ''}${isWeekend(dates[ci]) ? ' we' : ''}${teamLocked ? ' lock' : ''}" title="${n} on duty${t.minStrength != null ? ` (minimum ${t.minStrength})` : ''}${teamLocked ? ' - leave lockdown for this team' : ''}">${n}</td>`;
+        body += `<td class="cnt${low ? ' low' : ''}${isWeekend(dates[ci]) ? ' we' : ''}${teamLocked ? ' lock' : ''}${days[ci].noSupervision ? ' nosup' : ''}" title="${esc(countTitle(t, days[ci], teamLocked))}">${n}</td>`;
       });
       body += '</tr>';
       for (const p of g.people) {
         const r = personRows.length;
         personRows.push(p);
-        body += `<tr class="person${p.id === myId ? ' me' : ''}"><th class="name" scope="row" data-pid="${p.id}"><button class="linkish" data-person="${p.id}"><span class="ini">${esc(p.initials || '')}</span>${esc(p.name)}</button></th>`;
+        body += `<tr class="person${p.id === myId ? ' me' : ''}${p.teamRole ? ` r-${p.teamRole}` : ''}"><th class="name" scope="row" data-pid="${p.id}"><button class="linkish" data-person="${p.id}"><span class="ini">${esc(p.initials || '')}</span><span class="nm">${esc(p.name)}</span>${roleBadge(p)}</button></th>`;
         if (v.showStaff) body += `<td class="fx">${esc(p.staffNumber)}</td>`;
         for (const a of accs) {
           const st = accStatus(p.acc[a.id], today);
@@ -326,12 +365,15 @@ export async function render(root) {
     for (const c of cols) {
       let total = 0;
       for (const g of drawnGroups) {
-        const n = g.people.reduce((k, p) => k + (onDuty(data.cells.get(`${p.id}|${dates[c]}`)?.c ?? '') ? 1 : 0), 0);
+        const x = teamDay(g, dates[c]);
+        const n = x.n;
         total += n;
         const el = g.cntEls?.[c];
         if (el) {
           el.textContent = n;
           el.classList.toggle('low', g.team.minStrength != null && n < g.team.minStrength);
+          el.classList.toggle('nosup', x.noSupervision);
+          el.title = countTitle(g.team, x, el.classList.contains('lock'));
         }
       }
       if (totalEls[c]) totalEls[c].textContent = total;
@@ -671,6 +713,8 @@ export async function render(root) {
           ([cat, codes]) => html`<h3>${cat[0].toUpperCase() + cat.slice(1)}</h3>
             <ul>${codes.map((c) => html`<li><span class="chip" style="${cellStyle(c.code)}">${c.code}</span> ${c.label}${c.private ? html` <small class="muted">(private)</small>` : ''}</li>`)}</ul>`,
         )}
+        <h3>Team positions</h3><p class="muted"><span class="role role-leader">TL</span> team leader · <span class="role role-sup">SUP</span> supervisor ·
+          a count with an amber underline means no team leader or supervisor is on duty that day.</p>
         <h3>Dates</h3><p class="muted"><span class="holiday-tag">Hol</span> public holiday · <span class="legend-lock"></span> leave lockdown (hover a date for its name)</p>
         <h3>Counts</h3><p class="muted">Numbers on team rows show how many people are on a duty (not rest, leave or training) each day. Red means below the team's minimum.</p>
       </div>`,
@@ -687,7 +731,7 @@ export async function render(root) {
       html`<dl class="kv">
           <dt>Staff no</dt><dd>${p.staffNumber}</dd>
           <dt>Initials</dt><dd>${p.initials || '–'}</dd>
-          <dt>Team</dt><dd>${team?.name || '–'}</dd>
+          <dt>Team</dt><dd>${team?.name || '–'}${p.teamRole === 'leader' ? ' · Team leader' : p.teamRole === 'supervisor' ? ' · Supervisor' : ''}</dd>
           ${p.jobTitle ? html`<dt>Job title</dt><dd>${p.jobTitle}</dd>` : ''}
           ${p.email ? html`<dt>Email</dt><dd>${p.email}</dd>` : ''}
           ${p.mobile ? html`<dt>Mobile</dt><dd><a href="tel:${p.mobile.replace(/[^+\d]/g, '')}">${p.mobile}</a></dd>` : ''}

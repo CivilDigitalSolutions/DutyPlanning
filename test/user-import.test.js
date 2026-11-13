@@ -152,3 +152,22 @@ test('import sets line managers, including ones in the same file', async () => {
   assert.equal(rep.line_manager_id, boss.id);
   assert.deepEqual(r.body.summary.managersNotFound, ['nobody@org.test']);
 });
+
+test('import sets team positions (one team leader per team)', async () => {
+  const admin = await session('admin');
+  const csv = [
+    'Email,Full name,Team,Team position',
+    'lead@org.test,Lee Lead,Team 1,Team leader',
+    'sup@org.test,Sue Sup,Team 1,supervisor',
+    'lead2@org.test,Len Two,Team 1,TL',
+    'odd@org.test,Odd One,Team 1,captain',
+  ].join('\n');
+  const dry = await admin('/users/import?dryRun=1', { method: 'POST', body: csv });
+  const errs = Object.fromEntries(dry.body.preview.rows.map((r) => [r.email, r.errors.join(' ')]));
+  assert.match(errs['lead2@org.test'], /already has a team leader on row 2/);
+  assert.match(errs['odd@org.test'], /must be team leader, supervisor or blank/);
+  await admin('/users/import', { method: 'POST', body: csv, headers: { 'X-Temp-Password': 'Welcome2026' } });
+  const role = (e) => db.prepare('SELECT team_role FROM people WHERE email = ?').get(e).team_role;
+  assert.equal(role('lead@org.test'), 'leader');
+  assert.equal(role('sup@org.test'), 'supervisor');
+});

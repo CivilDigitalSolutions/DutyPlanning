@@ -77,6 +77,22 @@ tx(db, () => {
     const members = db.prepare('SELECT id FROM people WHERE team_id = ? ORDER BY sort_order').all(t.id);
     const lead = members[0]?.id;
     for (const m of members.slice(1)) db.prepare('UPDATE people SET line_manager_id = ? WHERE id = ?').run(lead, m.id);
+    // Team positions: the first person leads the team; the next two are supervisors.
+    if (lead) db.prepare("UPDATE people SET team_role = 'leader' WHERE id = ?").run(lead);
+    for (const m of members.slice(1, 3)) db.prepare("UPDATE people SET team_role = 'supervisor' WHERE id = ?").run(m.id);
+  }
+  // One day where Team 3's leader and supervisors are all on leave while the team works,
+  // to show the "no team leader or supervisor on duty" warning on the plan.
+  {
+    const t3 = db.prepare("SELECT id FROM teams WHERE name = 'Team 3'").get().id;
+    const leads = db.prepare('SELECT id FROM people WHERE team_id = ? AND team_role IS NOT NULL').all(t3).map((p) => p.id);
+    for (let i = 3; i < 25; i++) {
+      const d = addDays(today, i);
+      if (leads.every((pid) => db.prepare("SELECT code FROM assignments WHERE person_id = ? AND date = ?").get(pid, d)?.code === 'T3')) {
+        for (const pid of leads) db.prepare("UPDATE assignments SET code = 'AL' WHERE person_id = ? AND date = ?").run(pid, d);
+        break;
+      }
+    }
   }
 
   // Sample leave requests at each stage of the workflow.

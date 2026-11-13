@@ -27,6 +27,7 @@ import { registerLeaveRoutes } from './leave.js';
 import { REGIONS, ukBankHolidays } from './holidays.js';
 import { buildIcs } from './ics.js';
 
+const TEAM_ROLES = ['leader', 'supervisor'];
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const MAX_RANGE_DAYS = 400;
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
@@ -189,7 +190,10 @@ export function createApp(db, config = {}) {
     db
       .prepare(
         `SELECT t.id, t.name, t.sort_order AS sortOrder, t.establishment, t.min_strength AS minStrength, t.color,
-                (SELECT COUNT(*) FROM people p WHERE p.team_id = t.id AND p.active = 1) AS strength
+                (SELECT COUNT(*) FROM people p WHERE p.team_id = t.id AND p.active = 1) AS strength,
+                (SELECT p.id FROM people p WHERE p.team_id = t.id AND p.active = 1 AND p.team_role = 'leader' LIMIT 1) AS leaderId,
+                (SELECT p.name FROM people p WHERE p.team_id = t.id AND p.active = 1 AND p.team_role = 'leader' LIMIT 1) AS leaderName,
+                (SELECT group_concat(p.name, ', ') FROM people p WHERE p.team_id = t.id AND p.active = 1 AND p.team_role = 'supervisor') AS supervisorNames
          FROM teams t ORDER BY t.sort_order, t.name`,
       )
       .all();
@@ -230,7 +234,7 @@ export function createApp(db, config = {}) {
 
     const people = db
       .prepare(
-        `SELECT id, staff_number AS staffNumber, name, initials, mobile, email, job_title AS jobTitle, team_id AS teamId, sort_order AS sortOrder
+        `SELECT id, staff_number AS staffNumber, name, initials, mobile, email, job_title AS jobTitle, team_id AS teamId, team_role AS teamRole, sort_order AS sortOrder
          FROM people WHERE active = 1 ORDER BY sort_order, name`,
       )
       .all();
@@ -430,12 +434,37 @@ export function createApp(db, config = {}) {
     }),
   );
 
+  // Team leader and supervisors for a team, set together from the team's edit screen.
+  app.put(
+    '/api/teams/:id/roles',
+    planner,
+    json,
+    wrap((req, res) => {
+      const teamId = Number(req.params.id);
+      if (!db.prepare('SELECT 1 FROM teams WHERE id = ?').get(teamId)) throw new HttpError(404, 'Team not found');
+      const members = new Set(db.prepare('SELECT id FROM people WHERE team_id = ?').all(teamId).map((p) => p.id));
+      const leaderId = req.body?.leaderId == null || req.body.leaderId === '' ? null : Number(req.body.leaderId);
+      const supervisorIds = [...new Set((req.body?.supervisorIds || []).map(Number))];
+      for (const id of [leaderId, ...supervisorIds].filter((x) => x != null))
+        if (!members.has(id)) throw bad('Team leader and supervisors must be members of the team');
+      if (leaderId != null && supervisorIds.includes(leaderId)) throw bad('The team leader cannot also be a supervisor');
+      tx(db, () => {
+        db.prepare('UPDATE people SET team_role = NULL WHERE team_id = ?').run(teamId);
+        if (leaderId != null) db.prepare("UPDATE people SET team_role = 'leader' WHERE id = ?").run(leaderId);
+        for (const id of supervisorIds) db.prepare("UPDATE people SET team_role = 'supervisor' WHERE id = ?").run(id);
+        audit(db, req.user, 'team.roles', { id: teamId, leaderId, supervisorIds });
+      });
+      broadcast({ type: 'meta' });
+      res.json({ ok: true });
+    }),
+  );
+
   // ---------------- People ----------------
   app.get('/api/people', planner, (req, res) => {
     const people = db
       .prepare(
         `SELECT p.id, p.staff_number AS staffNumber, p.name, p.initials, p.mobile, p.email, p.job_title AS jobTitle, p.start_date AS startDate,
-                p.line_manager_id AS lineManagerId,
+                p.line_manager_id AS lineManagerId, p.team_role AS teamRole,
                 p.team_id AS teamId, p.sort_order AS sortOrder, p.active,
                 (SELECT u.username FROM users u WHERE u.person_id = p.id LIMIT 1) AS username
          FROM people p LEFT JOIN teams t ON t.id = p.team_id
@@ -474,7 +503,19 @@ export function createApp(db, config = {}) {
       s(b.jobTitle, 100) || null,
       startDate,
       lineManagerId,
+      teamId == null ? null : teamRole(b.teamRole),
     ];
+  };
+  const teamRole = (v) => {
+    if (v == null || v === '') return null;
+    if (!TEAM_ROLES.includes(v)) throw bad('Team role must be team leader, supervisor or none');
+    return v;
+  };
+  // A team has one team leader: making someone leader steps the previous one down.
+  const oneLeader = (personId) => {
+    const p = db.prepare('SELECT team_id, team_role FROM people WHERE id = ?').get(personId);
+    if (p?.team_role === 'leader' && p.team_id)
+      db.prepare("UPDATE people SET team_role = NULL WHERE team_id = ? AND team_role = 'leader' AND id <> ?").run(p.team_id, personId);
   };
   const uniqueGuard = (fn, msg) => {
     try {
@@ -494,12 +535,13 @@ export function createApp(db, config = {}) {
           Number(
             db
               .prepare(
-                'INSERT INTO people (staff_number,name,initials,mobile,team_id,sort_order,active,email,job_title,start_date,line_manager_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                'INSERT INTO people (staff_number,name,initials,mobile,team_id,sort_order,active,email,job_title,start_date,line_manager_id,team_role) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
               )
               .run(...personBody(req.body || {})).lastInsertRowid,
           ),
         'That staff number or email is already used by someone else',
       );
+      oneLeader(id);
       audit(db, req.user, 'person.create', { id, staffNumber: req.body.staffNumber });
       broadcast({ type: 'meta' });
       res.json({ id });
@@ -514,12 +556,13 @@ export function createApp(db, config = {}) {
         () =>
           db
             .prepare(
-              'UPDATE people SET staff_number=?, name=?, initials=?, mobile=?, team_id=?, sort_order=?, active=?, email=?, job_title=?, start_date=?, line_manager_id=? WHERE id=?',
+              'UPDATE people SET staff_number=?, name=?, initials=?, mobile=?, team_id=?, sort_order=?, active=?, email=?, job_title=?, start_date=?, line_manager_id=?, team_role=? WHERE id=?',
             )
             .run(...personBody(req.body || {}, Number(req.params.id)), Number(req.params.id)),
         'That staff number or email is already used by someone else',
       );
       if (!r.changes) throw new HttpError(404, 'Person not found');
+      oneLeader(Number(req.params.id));
       audit(db, req.user, 'person.update', { id: req.params.id });
       broadcast({ type: 'meta' });
       res.json({ ok: true });

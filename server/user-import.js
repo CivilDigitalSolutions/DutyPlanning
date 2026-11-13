@@ -15,6 +15,7 @@ export const USER_COLUMNS = [
   { key: 'initials', header: 'Initials', width: 9, example: 'AS', desc: 'Shown on the plan. If blank, made from the name.', re: /^init(ial)?s?$/i },
   { key: 'mobile', header: 'Mobile', width: 16, example: '07700 900123', desc: 'Mobile phone number.', re: /^(mobile|mob|cell|phone|tel(ephone)?|contact)(\s*(phone\s*)?(no\.?|number|#))?$/i },
   { key: 'team', header: 'Team', width: 14, example: 'Team 1', desc: 'Team name exactly as it appears in the app. Leave blank for no team.', re: /^(team|group|unit|crew|watch|shift\s*team)(\s*name)?$/i },
+  { key: 'teamRole', header: 'Team position', width: 14, example: 'supervisor', desc: 'Team leader or supervisor; leave blank for a team member. Each team has one team leader, who ranks above its supervisors.', re: /^team\s*(position|role|rank)$/i },
   { key: 'position', header: 'Position in team', width: 10, example: '3', desc: 'Optional order within the team on the plan (a number). Blank puts them at the end.', re: /^(position|order)(\s*in\s*team)?$|^sort(\s*order)?$/i },
   { key: 'jobTitle', header: 'Job title', width: 18, example: 'Officer', desc: 'Rank, grade or job title.', re: /^(job\s*title|title|rank|grade|post|position\s*title)$/i },
   { key: 'startDate', header: 'Start date', width: 12, example: '01/04/2026', desc: 'Date they joined, as dd/mm/yyyy.', re: /^(start(\s*date)?|date\s*(joined|started)|joined)$/i },
@@ -57,6 +58,7 @@ export function parseUserRows(rows, { teams, accreditations, dateOrder = 'dmy' }
   const teamByName = new Map(teams.map((t) => [t.name.toLowerCase(), t]));
   const seenEmail = new Map();
   const seenStaff = new Map();
+  const leaderRow = new Map();
   const out = [];
   for (let r = headerIdx + 1; r < rows.length; r++) {
     const raw = rows[r] || [];
@@ -80,6 +82,20 @@ export function parseUserRows(rows, { teams, accreditations, dateOrder = 'dmy' }
 
     const teamName = get('team');
     const team = teamName ? teamByName.get(teamName.toLowerCase()) : null;
+
+    const rawTeamRole = get('teamRole').toLowerCase().replace(/[^a-z]/g, '');
+    let teamRole = null;
+    if (rawTeamRole) {
+      if (['teamleader', 'leader', 'tl'].includes(rawTeamRole)) teamRole = 'leader';
+      else if (['supervisor', 'sup', 'teamsupervisor'].includes(rawTeamRole)) teamRole = 'supervisor';
+      else errors.push(`Team position "${get('teamRole')}" must be team leader, supervisor or blank`);
+      if (teamRole && !get('team')) errors.push('A team leader or supervisor needs a Team');
+      if (teamRole === 'leader' && get('team')) {
+        const key = get('team').toLowerCase();
+        if (leaderRow.has(key)) errors.push(`${get('team')} already has a team leader on row ${leaderRow.get(key)}`);
+        else leaderRow.set(key, r + 1);
+      }
+    }
 
     let role = get('role').toLowerCase();
     if (role && !ROLES.includes(role)) {
@@ -132,6 +148,7 @@ export function parseUserRows(rows, { teams, accreditations, dateOrder = 'dmy' }
       jobTitle: get('jobTitle'),
       startDate,
       role,
+      teamRole,
       lineManagerEmail,
       acc,
       errors,

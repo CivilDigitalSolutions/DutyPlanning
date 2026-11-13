@@ -78,7 +78,7 @@ async function people(body, params) {
     );
     $('tbody', body).innerHTML = html`${rows.map(
       (p) => html`<tr class="${p.active ? '' : 'inactive'}">
-        <td>${p.staffNumber}</td><td>${p.name}${p.active ? '' : html` <small class="muted">(inactive)</small>`}</td><td>${p.initials || ''}</td>
+        <td>${p.staffNumber}</td><td>${p.name}${p.teamRole === 'leader' ? html` <span class="role role-leader">TL</span>` : p.teamRole === 'supervisor' ? html` <span class="role role-sup">SUP</span>` : ''}${p.active ? '' : html` <small class="muted">(inactive)</small>`}</td><td>${p.initials || ''}</td>
         <td>${state.teamMap.get(p.teamId)?.name || '–'}</td><td>${p.jobTitle || ''}</td><td>${p.mobile || ''}</td><td>${p.email || ''}</td><td>${p.username || html`<span class="muted">–</span>`}</td>
         <td class="actions"><button class="btn btn-sm" data-edit="${p.id}">Edit</button></td></tr>`,
     )}`;
@@ -123,7 +123,12 @@ async function people(body, params) {
           .filter((x) => x.active && x.id !== p?.id)
           .map((x) => html`<option value="${x.id}" ${p?.lineManagerId === x.id ? 'selected' : ''}>${x.name} (${x.staffNumber})</option>`)}</select></label>
         <label>Team<select name="teamId"><option value="">No team</option>${state.meta.teams.map((t) => html`<option value="${t.id}" ${p?.teamId === t.id ? 'selected' : ''}>${t.name}</option>`)}</select></label>
-        <label>Position in team<input name="sortOrder" type="number" value="${p?.sortOrder ?? 0}" /></label>
+        <label>Team position<select name="teamRole">
+          <option value="" ${!p?.teamRole ? 'selected' : ''}>Team member</option>
+          <option value="supervisor" ${p?.teamRole === 'supervisor' ? 'selected' : ''}>Supervisor</option>
+          <option value="leader" ${p?.teamRole === 'leader' ? 'selected' : ''}>Team leader (replaces the current one)</option>
+        </select></label>
+                <label>Position in team<input name="sortOrder" type="number" value="${p?.sortOrder ?? 0}" /></label>
         <label class="check span2"><input type="checkbox" name="active" ${!p || p.active ? 'checked' : ''} /> Active (shown on the plan)</label>
         ${state.meta.accreditations.length
           ? html`<fieldset class="span2"><legend>Accreditations</legend><div class="acc-edit">
@@ -222,7 +227,9 @@ async function simpleCrud(body, { title, rows, columns, fields, keyOf, create, u
   draw();
 }
 
-function teams(body) {
+async function teams(body) {
+  let { people: ppl } = await get('/people');
+  const membersOf = (t) => ppl.filter((p) => p.teamId === t.id && p.active);
   return simpleCrud(body, {
     title: 'Teams',
     addLabel: 'Add team',
@@ -231,6 +238,8 @@ function teams(body) {
     columns: [
       ['Order', (t) => t.sortOrder],
       ['Team', (t) => t.name],
+      ['Team leader', (t) => t.leaderName || html`<span class="muted">–</span>`],
+      ['Supervisors', (t) => t.supervisorNames || html`<span class="muted">–</span>`],
       ['Establishment', (t) => t.establishment],
       ['Filled', (t) => t.strength],
       ['Vacancies', (t) => Math.max(0, t.establishment - t.strength)],
@@ -242,9 +251,29 @@ function teams(body) {
       <label>Minimum on duty per day<input name="minStrength" type="number" min="0" value="${t?.minStrength ?? ''}" placeholder="none" /></label>
       <label>Display order<input name="sortOrder" type="number" value="${t?.sortOrder ?? state.meta.teams.length}" /></label>
       <p class="span2 muted">Vacant posts (establishment minus people in the team) are shown as empty rows on the plan.</p>
+      ${t
+        ? membersOf(t).length
+          ? html`<fieldset class="span2"><legend>Team positions</legend>
+              <label>Team leader <small class="muted">(one per team, senior to supervisors)</small>
+                <select name="leaderId"><option value="">None</option>${membersOf(t).map((p) => html`<option value="${p.id}" ${p.teamRole === 'leader' ? 'selected' : ''}>${p.name} (${p.staffNumber})</option>`)}</select></label>
+              <p class="muted small">Supervisors</p>
+              <div class="sup-picks">${membersOf(t).map(
+                (p) => html`<label class="check"><input type="checkbox" name="sup" value="${p.id}" ${p.teamRole === 'supervisor' ? 'checked' : ''} /> ${p.name}</label>`,
+              )}</div>
+              <p class="muted small">They're listed first in the team on the plan, with TL and SUP badges.</p>
+            </fieldset>`
+          : html`<p class="span2 muted">Add people to this team to choose its team leader and supervisors.</p>`
+        : html`<p class="span2 muted">Save the team and add people to it, then choose its team leader and supervisors here.</p>`}
     </div>`,
     create: (v) => post('/teams', v),
-    update: (t, v) => put(`/teams/${t.id}`, v),
+    update: async (t, v, form) => {
+      await put(`/teams/${t.id}`, v);
+      if (form.leaderId) {
+        const supervisorIds = [...form.querySelectorAll('input[name=sup]:checked')].map((x) => Number(x.value)).filter((id) => String(id) !== form.leaderId.value);
+        await put(`/teams/${t.id}/roles`, { leaderId: form.leaderId.value || null, supervisorIds });
+        ppl = (await get('/people')).people;
+      }
+    },
     remove: (t) => del(`/teams/${t.id}`),
   });
 }
@@ -735,6 +764,7 @@ async function audit(body) {
     if (!d) return '';
     if (e.action === 'assignments.update') return `${d.count} cell(s) ${d.from}${d.to !== d.from ? ` to ${d.to}` : ''}`;
     if (e.action === 'assignments.pattern') return `${d.personIds.length} people, ${d.from} to ${d.to}: ${d.pattern.map((x) => x || '-').join(' ')}`;
+    if (e.action === 'team.roles') return `Team #${d.id}: leader and supervisors updated`;
     if (e.action.startsWith('lockdown.')) return d.name ? `${d.name}: ${d.start} to ${d.end}` : `Lockdown #${d.id}`;
     if (e.action.startsWith('holiday.')) return d.year ? `${d.year} ${d.region}: ${d.added} added` : `${d.date}${d.name ? ' ' + d.name : ''}`;
     if (e.action.startsWith('leave.')) return `Request #${d.id}: ${d.start} to ${d.end}`;

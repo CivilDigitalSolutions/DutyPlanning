@@ -171,3 +171,26 @@ test('calendar export for linked staff', async () => {
   assert.equal(r.status, 200);
   assert.match(Buffer.from(r.body).toString(), /BEGIN:VCALENDAR/);
 });
+
+test('team leader and supervisors: set per team, one leader, shown on the roster', async () => {
+  const plan = await login('plan');
+  const staff = await login('100');
+  // Team 1 has people 1 (Ann) and 2 (Bob); person 3 (Cat) is in Team 2.
+  assert.equal((await staff('/teams/1/roles', { method: 'PUT', body: { leaderId: 1 } })).status, 403);
+  assert.equal((await plan('/teams/1/roles', { method: 'PUT', body: { leaderId: 3 } })).status, 400, 'leader must be in the team');
+  assert.equal((await plan('/teams/1/roles', { method: 'PUT', body: { leaderId: 1, supervisorIds: [1] } })).status, 400, 'not both');
+  assert.equal((await plan('/teams/1/roles', { method: 'PUT', body: { leaderId: 1, supervisorIds: [2] } })).status, 200);
+
+  const roster = await staff('/roster?from=2030-01-01&to=2030-01-01');
+  const role = Object.fromEntries(roster.body.people.map((p) => [p.staffNumber, p.teamRole]));
+  assert.deepEqual([role['100'], role['101'], role['200']], ['leader', 'supervisor', null]);
+  const team = roster.body.teams.find((t) => t.id === 1);
+  assert.deepEqual([team.leaderName, team.supervisorNames], ['Ann Able', 'Bob Baker']);
+
+  // Making Bob leader on his own record steps Ann down: one leader per team.
+  const bob = (await plan('/people')).body.people.find((p) => p.staffNumber === '101');
+  assert.equal((await plan(`/people/${bob.id}`, { method: 'PUT', body: { ...bob, teamRole: 'leader' } })).status, 200);
+  const after = Object.fromEntries((await plan('/people')).body.people.map((p) => [p.staffNumber, p.teamRole]));
+  assert.deepEqual([after['100'], after['101']], [null, 'leader']);
+  assert.equal((await plan(`/people/${bob.id}`, { method: 'PUT', body: { ...bob, teamRole: 'boss' } })).status, 400);
+});
