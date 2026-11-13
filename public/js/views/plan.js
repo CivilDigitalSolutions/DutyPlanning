@@ -218,7 +218,8 @@ export async function render(root) {
       const leads = data.people
         .map((p) => ({ p, role: (p.positions || []).find((x) => x.teamId === t.id)?.role }))
         .filter((x) => x.role);
-      return { team: t, people: all.filter(matches), members: all, leads, vacancies: Math.max(0, t.establishment - all.length) };
+      const guests = leads.filter((x) => x.p.teamId !== t.id && matches(x.p)).sort((a, b) => (ROLE_RANK[a.role] ?? 2) - (ROLE_RANK[b.role] ?? 2));
+      return { team: t, people: all.filter(matches), members: all, leads, guests, vacancies: Math.max(0, t.establishment - all.length) };
     });
     if (!v.teams.length && !isPostings()) {
       const orphans = data.people.filter((p) => !known.has(p.teamId)).filter(matches);
@@ -235,15 +236,36 @@ export async function render(root) {
     (p.positions || [])
       .filter((x) => x.teamId !== p.teamId)
       .map((x) => `${x.role === 'leader' ? 'Team leader' : 'Supervisor'} of ${state.teamMap.get(x.teamId)?.name || 'another team'}`);
-  const roleBadge = (p) => {
-    const others = otherPositions(p);
-    if (p.teamRole === 'leader') return `<span class="role role-leader" title="${esc(['Team leader', ...others].join(' · '))}">TL</span>`;
-    if (p.teamRole === 'supervisor') return `<span class="role role-sup" title="${esc(['Supervisor', ...others].join(' · '))}">SUP</span>`;
-    if (!others.length) return '';
-    // Only holds a position in another team: a "+" badge naming it.
-    const leadsOther = (p.positions || []).some((x) => x.teamId !== p.teamId && x.role === 'leader');
-    return `<span class="role ${leadsOther ? 'role-leader' : 'role-sup'}" title="${esc(others.join(' · '))}">+${leadsOther ? 'TL' : 'SUP'}</span>`;
+  // Short label for a team on badges: "Team 2" -> "T2", "Response Unit" -> "RU".
+  const teamAbbr = (teamId) => {
+    const name = state.teamMap.get(teamId)?.name || '';
+    const m = name.match(/^team\s*(\w+)$/i);
+    if (m) return `T${m[1]}`.slice(0, 4);
+    return (name.split(/\s+/).filter(Boolean).map((w) => w[0]).join('') || '?').toUpperCase().slice(0, 3);
   };
+  const roleBadge = (p) => {
+    let out = '';
+    if (p.teamRole === 'leader') out += `<span class="role role-leader" title="Team leader">TL</span>`;
+    else if (p.teamRole === 'supervisor') out += `<span class="role role-sup" title="Supervisor">SUP</span>`;
+    // One badge per position held in another team, e.g. "SUP·T2".
+    for (const x of (p.positions || []).filter((x) => x.teamId !== p.teamId)) {
+      const what = x.role === 'leader' ? 'TL' : 'SUP';
+      const title = `${x.role === 'leader' ? 'Team leader' : 'Supervisor'} of ${state.teamMap.get(x.teamId)?.name || 'another team'}`;
+      out += `<span class="role ${x.role === 'leader' ? 'role-leader' : 'role-sup'} role-other" title="${esc(title)}">${what}·${esc(teamAbbr(x.teamId))}</span>`;
+    }
+    return out;
+  };
+  /** A team's leader/supervisors from other teams, shown as linked rows in this team (view only). */
+  const guestRowHtml = (p, role, fixed) => {
+    let row = `<tr class="person guest"><th class="name" scope="row"><button class="linkish" data-person="${p.id}" title="${esc(`${role === 'leader' ? 'Team leader' : 'Supervisor'} of this team, from ${state.teamMap.get(p.teamId)?.name || 'another team'} - edit their duties in their own team`)}"><span class="ini">${esc(p.initials || '')}</span><span class="nm">${esc(p.name)}</span><span class="role ${role === 'leader' ? 'role-leader' : 'role-sup'}">${role === 'leader' ? 'TL' : 'SUP'}</span><small class="guest-from">${esc(teamAbbr(p.teamId))}</small></button></th>`;
+    if (fixed > 1) row += `<td class="fx" colspan="${fixed - 1}"></td>`;
+    for (const d of dates) row += guestCellHtml(p, d);
+    return row + '</tr>';
+  };
+  const guestCellHtml = (p, d) =>
+    cellHtml(p, d, 0, 0)
+      .replace(/^<td class="c/, '<td class="c guest')
+      .replace(/ data-r="\d+" data-c="\d+"/, ` data-gp="${p.id}" data-d="${d}"`);
   /** On-duty count for a team on a date, and whether its team leader / a supervisor is on duty. */
   function teamDay(g, d) {
     let n = 0;
@@ -395,6 +417,7 @@ export async function render(root) {
         body += `<td class="cnt${low ? ' low' : ''}${isWeekend(dates[ci]) ? ' we' : ''}${teamLocked ? ' lock' : ''}${days[ci].noSupervision ? ' nosup' : ''}" title="${esc(countTitle(t, days[ci], teamLocked))}">${n}</td>`;
       });
       body += '</tr>';
+      for (const { p, role } of g.guests || []) body += guestRowHtml(p, role, fixed);
       for (const p of g.people) {
         const r = personRows.length;
         personRows.push(p);
@@ -426,7 +449,7 @@ export async function render(root) {
     table.classList.toggle('editable', canEditLayer());
     table.classList.toggle('postings', isPostings());
     for (const b of root.querySelectorAll('[data-layer]')) b.classList.toggle('btn-primary', b.dataset.layer === v.layer);
-    cellEls = $$('td.c', table);
+    cellEls = $$('td.c:not(.guest)', table);
     rowOf = new Map(personRows.map((p, i) => [p.id, i]));
     colOf = new Map(dates.map((d, i) => [d, i]));
     const teamCnt = $$('tbody.team', table).map((tb) => $$('tr.team-row td.cnt', tb));
@@ -454,6 +477,7 @@ export async function render(root) {
       old.replaceWith(el);
       cellEls[idx] = el;
       cols.add(c);
+      for (const g of table.querySelectorAll(`td.guest[data-gp="${ch.personId}"][data-d="${ch.date}"]`)) g.outerHTML = guestCellHtml(personRows[r], ch.date);
     }
     if (isPostings()) {
       for (const c of cols) {
@@ -538,6 +562,10 @@ export async function render(root) {
 
   table.addEventListener('pointerdown', (e) => {
     const td = e.target.closest('td.c');
+    if (td?.classList.contains('guest')) {
+      toast(`${data.peopleById.get(Number(td.dataset.gp))?.name || 'This person'} is from another team - change their ${isPostings() ? 'postings' : 'duties'} in their own team's rows`, 'info', 4000);
+      return;
+    }
     if (!td || e.button > 0) return;
     const r = Number(td.dataset.r),
       c = Number(td.dataset.c);
@@ -560,7 +588,7 @@ export async function render(root) {
   });
   table.addEventListener('pointerover', (e) => {
     if (!dragging) return;
-    const td = e.target.closest('td.c');
+    const td = e.target.closest('td.c:not(.guest)');
     if (td && sel) {
       const r = Number(td.dataset.r),
         c = Number(td.dataset.c);

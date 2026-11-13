@@ -1976,3 +1976,45 @@ td.hol-date {
 .grid.postings td.cnt {
   font-size: 10px;
 }
+
+/* Leaders/supervisors from another team, shown as view-only linked rows in the team they lead or supervise. */
+.role-other {
+  border-style: dashed;
+  background: transparent;
+  margin-left: 2px;
+}
+.grid tr.guest .name {
+  font-style: italic;
+}
+.grid tr.guest > * {
+  border-top: 1px dashed var(--line, #c9ced6);
+}
+.grid tr.guest td.c {
+  opacity: 0.72;
+  cursor: default;
+}
+.guest-from {
+  margin-left: 6px;
+  font-size: 0.72rem;
+  font-style: normal;
+  color: var(--muted, #6b7280);
+  white-space: nowrap;
+}
+.guest-from::before {
+  content: 'from ';
+}
+.guest-head {
+  margin: 10px 0 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.guest-list .nm {
+  font-style: italic;
+}
+.grid .guest-from {
+  margin-left: 4px;
+  font-size: 9px;
+}

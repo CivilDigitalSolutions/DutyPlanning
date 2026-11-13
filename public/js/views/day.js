@@ -83,11 +83,23 @@ export async function render(root, params) {
     </div>`;
 
     const RANK = { leader: 0, supervisor: 1 };
-    const person = (p) => {
+    const abbr = (teamId) => {
+      const name = state.teamMap.get(teamId)?.name || '';
+      const m = name.match(/^team\s*(\w+)$/i);
+      return m ? `T${m[1]}`.slice(0, 4) : (name.split(/\s+/).filter(Boolean).map((w) => w[0]).join('') || '?').toUpperCase().slice(0, 3);
+    };
+    // Badges for positions held in other teams, e.g. "SUP·T2".
+    const otherBadges = (p) =>
+      (p.positions || [])
+        .filter((x) => x.teamId !== p.teamId)
+        .map((x) => html`<span class="role ${x.role === 'leader' ? 'role-leader' : 'role-sup'} role-other" title="${x.role === 'leader' ? 'Team leader' : 'Supervisor'} of ${state.teamMap.get(x.teamId)?.name || 'another team'}">${x.role === 'leader' ? 'TL' : 'SUP'}·${abbr(x.teamId)}</span>`);
+    const person = (p, guestRole) => {
       const c = codeOf(p);
       const ps = postings.get(p.id);
       return html`<li class="${p.id === state.user.person?.id ? 'me' : ''}">${c ? chip(c) : html`<span class="chip empty">·</span>`}<span class="nm">${p.name}${ps ? html`<small class="posting-line">${postingText(ps)}</small>` : ''}</span>${
-        p.teamRole === 'leader' ? html`<span class="role role-leader" title="Team leader">TL</span>` : p.teamRole === 'supervisor' ? html`<span class="role role-sup" title="Supervisor">SUP</span>` : ''
+        guestRole
+          ? html`<span class="role ${guestRole === 'leader' ? 'role-leader' : 'role-sup'}">${guestRole === 'leader' ? 'TL' : 'SUP'}</span><small class="guest-from">${state.teamMap.get(p.teamId)?.name || ''}</small>`
+          : html`${p.teamRole === 'leader' ? html`<span class="role role-leader" title="Team leader">TL</span>` : p.teamRole === 'supervisor' ? html`<span class="role role-sup" title="Supervisor">SUP</span>` : ''}${otherBadges(p)}`
       }<span class="muted">${p.initials || ''}</span>${p.mobile ? html`<a class="tel" href="tel:${p.mobile.replace(/[^+\d]/g, '')}" aria-label="Call ${p.name}">📞</a>` : ''}</li>`;
     };
     let out = '';
@@ -110,13 +122,16 @@ export async function render(root, params) {
           .map((p) => ({ p, role: (p.positions || []).find((x) => x.teamId === t.id)?.role }))
           .filter((x) => x.role);
         const lead = leads.filter((x) => onDuty(codeOf(x.p)));
+        const guests = leads.filter((x) => x.p.teamId !== t.id && people.includes(x.p)).sort((a, b) => (RANK[a.role] ?? 2) - (RANK[b.role] ?? 2));
         const supervision = on && leads.length
           ? lead.length
             ? `In charge: ${lead.sort((a, b) => (RANK[a.role] ?? 2) - (RANK[b.role] ?? 2))[0].p.name}${lead[0].p.teamId !== t.id ? ` (${state.teamMap.get(lead[0].p.teamId)?.name || 'another team'})` : ''}`
             : 'No team leader or supervisor on duty'
           : '';
         out += html`<div class="card group-card"><h2>${t.name} <small class="${low ? 'error' : 'muted'}">${on} on duty${t.minStrength != null ? ` / min ${t.minStrength}` : ''}</small></h2>${supervision ? html`<p class="in-charge ${lead.length ? '' : 'warn-text'}">${supervision}</p>` : ''}
-          <ul class="who-list">${members.sort((a, b) => Number(onDuty(codeOf(b))) - Number(onDuty(codeOf(a))) || (RANK[a.teamRole] ?? 2) - (RANK[b.teamRole] ?? 2)).map(person)}</ul></div>`;
+          <ul class="who-list">${members.sort((a, b) => Number(onDuty(codeOf(b))) - Number(onDuty(codeOf(a))) || (RANK[a.teamRole] ?? 2) - (RANK[b.teamRole] ?? 2)).map((p) => person(p))}</ul>${
+            guests.length ? html`<h3 class="guest-head">From other teams</h3><ul class="who-list guest-list">${guests.map((x) => person(x.p, x.role))}</ul>` : ''
+          }</div>`;
       }
     } else {
       const order = [...state.meta.dutyCodes.map((c) => c.code), '*', ''];
@@ -130,7 +145,7 @@ export async function render(root, params) {
       for (const [code, list] of groups) {
         if (!list.length) continue;
         const label = code ? codeInfo(code).label : 'Not planned';
-        out += html`<div class="card group-card"><h2>${code ? chip(code) : ''} ${label} <small class="muted">${list.length}</small></h2><ul class="who-list">${list.map(person)}</ul></div>`;
+        out += html`<div class="card group-card"><h2>${code ? chip(code) : ''} ${label} <small class="muted">${list.length}</small></h2><ul class="who-list">${list.map((p) => person(p))}</ul></div>`;
       }
     }
     $('.day-body', root).innerHTML = out || '<p class="empty">Nobody matches.</p>';
