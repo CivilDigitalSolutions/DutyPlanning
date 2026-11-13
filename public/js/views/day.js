@@ -14,6 +14,7 @@ export async function render(root, params) {
   let mode = store.get('dayMode', 'team');
   let postings = new Map(); // personId -> { typeId, time, detail, updatedBy }
   let editable = new Set(); // team ids this user may post
+  let visible = new Set(); // team ids whose postings this user may see
   let types = [];
   const dirty = new Set(); // team ids with unsaved posting changes
   let acc = '';
@@ -50,6 +51,7 @@ export async function render(root, params) {
       data = roster;
       postings = new Map(pd.postings.map((x) => [x.personId, x]));
       editable = new Set(pd.editableTeams);
+      visible = new Set(pd.visibleTeams || []);
       types = pt.types;
       dirty.clear();
       draw();
@@ -90,7 +92,11 @@ export async function render(root, params) {
     };
     let out = '';
     if (mode === 'postings') {
-      $('.day-body', root).innerHTML = postingsHtml(people, codeOf, RANK) || '<p class="empty">Nobody is on duty this day.</p>';
+      const note =
+        visible.size < data.teams.length
+          ? html`<p class="muted small posting-privacy">Postings are private to each team. You can see ${visible.size === 1 ? 'your own team' : 'the teams you belong to, lead or supervise'}.</p>`
+          : '';
+      $('.day-body', root).innerHTML = note + (postingsHtml(people, codeOf, RANK) || '<p class="empty">Nobody in your team is on duty this day.</p>');
       return;
     }
     if (mode === 'team') {
@@ -99,10 +105,14 @@ export async function render(root, params) {
         if (!members.length) continue;
         const on = members.filter((p) => onDuty(codeOf(p))).length;
         const low = t.minStrength != null && on < t.minStrength;
-        const lead = members.filter((p) => p.teamRole && onDuty(codeOf(p)));
-        const supervision = on && members.some((p) => p.teamRole)
+        // Team leader / supervisors of this team (they may belong to another team).
+        const leads = data.people
+          .map((p) => ({ p, role: (p.positions || []).find((x) => x.teamId === t.id)?.role }))
+          .filter((x) => x.role);
+        const lead = leads.filter((x) => onDuty(codeOf(x.p)));
+        const supervision = on && leads.length
           ? lead.length
-            ? `In charge: ${lead.sort((a, b) => (RANK[a.teamRole] ?? 2) - (RANK[b.teamRole] ?? 2))[0].name}`
+            ? `In charge: ${lead.sort((a, b) => (RANK[a.role] ?? 2) - (RANK[b.role] ?? 2))[0].p.name}${lead[0].p.teamId !== t.id ? ` (${state.teamMap.get(lead[0].p.teamId)?.name || 'another team'})` : ''}`
             : 'No team leader or supervisor on duty'
           : '';
         out += html`<div class="card group-card"><h2>${t.name} <small class="${low ? 'error' : 'muted'}">${on} on duty${t.minStrength != null ? ` / min ${t.minStrength}` : ''}</small></h2>${supervision ? html`<p class="in-charge ${lead.length ? '' : 'warn-text'}">${supervision}</p>` : ''}
@@ -191,7 +201,8 @@ export async function render(root, params) {
     const badge = (p) =>
       p.teamRole === 'leader' ? html`<span class="role role-leader" title="Team leader">TL</span>` : p.teamRole === 'supervisor' ? html`<span class="role role-sup" title="Supervisor">SUP</span>` : '';
     let out = '';
-    for (const t of data.teams) {
+    // Postings are private to each team: only teams you belong to, lead or supervise are shown.
+    for (const t of data.teams.filter((x) => visible.has(x.id))) {
       const members = people.filter((p) => p.teamId === t.id);
       const working = members.filter((p) => onDuty(codeOf(p))).sort(byRole);
       // People with a posting who aren't on duty (e.g. put on leave since): shown so it can be cleared.

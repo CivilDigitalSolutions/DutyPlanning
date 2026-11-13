@@ -11,10 +11,10 @@ import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leav
 import { dialog, html, todayIso, toast, addDays } from '../public/js/util.js';
 import { buildPlanWorkbook, buildUserTemplate } from '../server/workbooks.js';
 import { buildIcs } from '../server/ics.js';
-import { canEditPostings, normalisePosting } from '../server/postings-rules.js';
+import { canEditPostings, canViewPostings, normalisePosting } from '../server/postings-rules.js';
 import { DEFAULT_POSTING_TYPES } from '../server/posting-types.js';
 
-const KEY = 'dp-demo-v10';
+const KEY = 'dp-demo-v11';
 const RANK = { staff: 1, planner: 2, admin: 3 };
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -87,8 +87,9 @@ const sortBy = (arr, ...keys) => [...arr].sort((a, b) => keys.reduce((r, k) => r
 const listTeams = () =>
   sortBy(db.teams, 'sortOrder', 'name').map((t) => {
     const members = db.people.filter((p) => p.teamId === t.id && p.active);
-    const leader = members.find((p) => p.teamRole === 'leader');
-    const sups = members.filter((p) => p.teamRole === 'supervisor');
+    const held = (db.positions || []).filter((x) => x.teamId === t.id).map((x) => ({ ...x, p: db.people.find((p) => p.id === x.personId) })).filter((x) => x.p?.active);
+    const leader = held.find((x) => x.role === 'leader')?.p;
+    const sups = held.filter((x) => x.role === 'supervisor').map((x) => x.p);
     return { ...t, strength: members.length, leaderId: leader?.id ?? null, leaderName: leader?.name ?? null, supervisorNames: sups.length ? sups.map((p) => p.name).join(', ') : null };
   });
 const listCodes = () => sortBy(db.codes, 'sortOrder', 'code');
@@ -166,7 +167,7 @@ on('GET', '/roster', ({ query }) => {
     'sortOrder',
     'name',
   ).map((p) => {
-    const out = { id: p.id, staffNumber: p.staffNumber, name: p.name, initials: p.initials, mobile: p.mobile, email: p.email, teamId: p.teamId, teamRole: p.teamRole || null, sortOrder: p.sortOrder, acc: db.pacc[p.id] || {} };
+    const out = { id: p.id, staffNumber: p.staffNumber, name: p.name, initials: p.initials, mobile: p.mobile, email: p.email, teamId: p.teamId, teamRole: p.teamRole || null, positions: positionsOf(p.id), sortOrder: p.sortOrder, acc: db.pacc[p.id] || {} };
     if (p.jobTitle) out.jobTitle = p.jobTitle;
     const canSee = planner || p.id === mine?.id || (mine?.teamId && mine.teamId === p.teamId);
     if (!canSee) {
@@ -256,12 +257,16 @@ on('PUT', '/teams/:id/roles', ({ body, params }) => {
   const u = need('planner');
   const teamId = Number(params.id);
   if (!db.teams.some((t) => t.id === teamId)) fail(404, 'Team not found');
-  const members = db.people.filter((p) => p.teamId === teamId);
   const leaderId = body?.leaderId == null || body.leaderId === '' ? null : Number(body.leaderId);
   const supervisorIds = [...new Set((body?.supervisorIds || []).map(Number))];
-  for (const id of [leaderId, ...supervisorIds].filter((x) => x != null)) if (!members.some((p) => p.id === id)) bad('Team leader and supervisors must be members of the team');
+  for (const id of [leaderId, ...supervisorIds].filter((x) => x != null)) if (!db.people.some((p) => p.id === id && p.active)) bad('Unknown person');
   if (leaderId != null && supervisorIds.includes(leaderId)) bad('The team leader cannot also be a supervisor');
-  for (const p of members) p.teamRole = p.id === leaderId ? 'leader' : supervisorIds.includes(p.id) ? 'supervisor' : null;
+  // Team leaders and supervisors can come from any team (someone may supervise several).
+  const before = db.positions.filter((x) => x.teamId === teamId).map((x) => x.personId);
+  db.positions = db.positions.filter((x) => x.teamId !== teamId);
+  if (leaderId != null) db.positions.push({ teamId, personId: leaderId, role: 'leader' });
+  for (const id of supervisorIds) db.positions.push({ teamId, personId: id, role: 'supervisor' });
+  for (const id of new Set([...before, leaderId, ...supervisorIds])) if (id != null) syncHomeRole(id);
   audit(u, 'team.roles', { id: teamId, leaderId, supervisorIds });
   changed({ type: 'meta' });
   return { ok: true };
@@ -326,7 +331,7 @@ on('GET', '/people', () => {
       a.name.localeCompare(b.name)
     );
   });
-  return { people: people.map((p) => ({ ...p, username: db.users.find((u) => u.personId === p.id)?.username ?? null })) };
+  return { people: people.map((p) => ({ ...p, positions: positionsOf(p.id), username: db.users.find((u) => u.personId === p.id)?.username ?? null })) };
 });
 const checkManager = (v, selfId) => {
   const mid = optInt(v);
@@ -340,10 +345,30 @@ const teamRoleOf = (v) => {
   if (!['leader', 'supervisor'].includes(v)) bad('Team role must be team leader, supervisor or none');
   return v;
 };
-// A team has one team leader: making someone leader steps the previous one down.
-const oneLeader = (pid) => {
+// Team positions (same rules as server/positions.js): one team leader per team; someone may hold
+// positions in several teams; person.teamRole mirrors the position in their own team.
+db.positions ??= db.people.filter((p) => p.teamRole && p.teamId).map((p) => ({ teamId: p.teamId, personId: p.id, role: p.teamRole }));
+function positionsOf(pid) {
+  return db.positions.filter((x) => x.personId === pid).map(({ teamId, role }) => ({ teamId, role }));
+}
+function syncHomeRole(pid) {
   const p = db.people.find((x) => x.id === pid);
-  if (p?.teamRole === 'leader' && p.teamId) for (const o of db.people) if (o.id !== pid && o.teamId === p.teamId && o.teamRole === 'leader') o.teamRole = null;
+  if (p) p.teamRole = db.positions.find((x) => x.personId === pid && x.teamId === p.teamId)?.role ?? null;
+}
+function setPos(teamId, pid, role) {
+  if (teamId == null) return;
+  const affected = new Set([pid]);
+  if (role === 'leader')
+    for (const x of db.positions.filter((x) => x.teamId === teamId && x.role === 'leader' && x.personId !== pid)) affected.add(x.personId);
+  db.positions = db.positions.filter((x) => !(x.teamId === teamId && (x.personId === pid || (role === 'leader' && x.role === 'leader'))));
+  if (role) db.positions.push({ teamId, personId: pid, role });
+  for (const id of affected) syncHomeRole(id);
+}
+// "Team position" on a person's record is their position in their own team.
+const savePosition = (pid, oldTeamId) => {
+  const p = db.people.find((x) => x.id === pid);
+  if (oldTeamId != null && oldTeamId !== p.teamId) setPos(oldTeamId, pid, null);
+  if (p.teamId != null) setPos(p.teamId, pid, p.teamRole);
 };
 const personBody = (b, selfId = null) => {
   const staffNumber = s(b.staffNumber, 50);
@@ -380,7 +405,7 @@ on('POST', '/people', ({ body }) => {
   if (p.email) unique(db.people, 'email', p.email, null, 'That email is already used by someone else');
   const id = nextId();
   db.people.push({ id, ...p });
-  oneLeader(id);
+  savePosition(id, null);
   audit(u, 'person.create', { id, staffNumber: p.staffNumber });
   changed({ type: 'meta' });
   return { id };
@@ -389,10 +414,11 @@ on('PUT', '/people/:id', ({ body, params }) => {
   const u = need('planner');
   const p = db.people.find((x) => x.id === Number(params.id)) || fail(404, 'Person not found');
   const v = personBody(body || {}, p.id);
+  const oldTeamId = p.teamId;
   unique(db.people, 'staffNumber', v.staffNumber, p.id, 'That staff number already exists');
   if (v.email) unique(db.people, 'email', v.email, p.id, 'That email is already used by someone else');
   Object.assign(p, v);
-  oneLeader(p.id);
+  savePosition(p.id, oldTeamId);
   audit(u, 'person.update', { id: p.id });
   changed({ type: 'meta' });
   return { ok: true };
@@ -794,8 +820,7 @@ on('POST', '/users/import', async ({ body, query, headers }) => {
     if (r.action === 'error' || r.action === 'skip' || !r.teamRole) continue;
     const p = byEmail(r.email);
     if (!p) continue;
-    p.teamRole = r.teamRole;
-    oneLeader(p.id);
+    setPos(p.teamId, p.id, r.teamRole);
   }
   summary.managersNotFound = [];
   for (const r of parsed.rows) {
@@ -1047,7 +1072,7 @@ db.postingTypes ??= DEFAULT_POSTING_TYPES.map((t, i) => ({ id: nextId(), name: t
 db.postings ??= {};
 const postingViewer = (u) => {
   const p = db.people.find((x) => x.id === u.personId);
-  return { role: u.role, teamId: p?.teamId ?? null, teamRole: p?.teamRole ?? null };
+  return { role: u.role, teamId: p?.teamId ?? null, positions: u.personId ? positionsOf(u.personId) : [] };
 };
 const listPostingTypes = () => [...db.postingTypes].sort((a, b) => Number(b.active) - Number(a.active) || a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 const postingTypeBody = (b) => {
@@ -1105,7 +1130,14 @@ on('GET', '/postings', ({ query }) => {
     .filter((p) => p.date >= from && p.date <= to && (!person || p.personId === person))
     .sort((a, b) => (a.date < b.date ? -1 : 1));
   const v = postingViewer(u);
-  return { postings, editableTeams: db.teams.map((t) => t.id).filter((id) => canEditPostings(v, id)) };
+  // Postings are private to each team: your own team's, plus any team you lead or supervise.
+  const visible = db.teams.map((t) => t.id).filter((id) => canViewPostings(v, id));
+  const teamOf = new Map(db.people.map((p) => [p.id, p.teamId]));
+  return {
+    postings: postings.filter((x) => x.personId === u.personId || visible.includes(teamOf.get(x.personId))),
+    editableTeams: db.teams.map((t) => t.id).filter((id) => canEditPostings(v, id)),
+    visibleTeams: visible,
+  };
 });
 on('PUT', '/postings', ({ body }) => {
   const u = need('staff');

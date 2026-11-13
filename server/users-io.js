@@ -4,6 +4,7 @@ import { tx, audit } from './db.js';
 import { hashPassword } from './auth.js';
 import { generatePassword } from './user-import.js';
 import { buildUserTemplate } from './workbooks.js';
+import { setPosition } from './positions.js';
 
 
 /** Build the .xlsx template: a "New users" sheet with dropdowns, plus instructions. */
@@ -131,8 +132,7 @@ export function applyUserImport(db, parsed, { createTeams = true, updateExisting
       const p = findByEmail.get(row.email);
       if (!p) continue;
       const teamId = db.prepare('SELECT team_id FROM people WHERE id = ?').get(p.id).team_id;
-      if (row.teamRole === 'leader') db.prepare("UPDATE people SET team_role = NULL WHERE team_id = ? AND team_role = 'leader' AND id <> ?").run(teamId, p.id);
-      db.prepare('UPDATE people SET team_role = ? WHERE id = ?').run(row.teamRole, p.id);
+      setPosition(db, teamId, p.id, row.teamRole);
     }
 
     // Keep establishment at least as large as the number of people, so new starters fill vacancies.

@@ -198,7 +198,11 @@ export async function render(root) {
     const known = new Set(data.teams.map((t) => t.id));
     const out = teams.map((t) => {
       const all = byRole(data.people.filter((p) => p.teamId === t.id));
-      return { team: t, people: all.filter(matches), members: all, vacancies: Math.max(0, t.establishment - all.length) };
+      // Team leader and supervisors may come from other teams (someone can supervise several).
+      const leads = data.people
+        .map((p) => ({ p, role: (p.positions || []).find((x) => x.teamId === t.id)?.role }))
+        .filter((x) => x.role);
+      return { team: t, people: all.filter(matches), members: all, leads, vacancies: Math.max(0, t.establishment - all.length) };
     });
     if (!v.teams.length) {
       const orphans = data.people.filter((p) => !known.has(p.teamId)).filter(matches);
@@ -211,24 +215,31 @@ export async function render(root) {
   // Team leader first, then supervisors, then everyone else (keeping their order).
   const ROLE_RANK = { leader: 0, supervisor: 1 };
   const byRole = (list) => [...list].sort((a, b) => (ROLE_RANK[a.teamRole] ?? 2) - (ROLE_RANK[b.teamRole] ?? 2));
-  const roleBadge = (p) =>
-    p.teamRole === 'leader'
-      ? '<span class="role role-leader" title="Team leader">TL</span>'
-      : p.teamRole === 'supervisor'
-        ? '<span class="role role-sup" title="Supervisor">SUP</span>'
-        : '';
+  const otherPositions = (p) =>
+    (p.positions || [])
+      .filter((x) => x.teamId !== p.teamId)
+      .map((x) => `${x.role === 'leader' ? 'Team leader' : 'Supervisor'} of ${state.teamMap.get(x.teamId)?.name || 'another team'}`);
+  const roleBadge = (p) => {
+    const others = otherPositions(p);
+    if (p.teamRole === 'leader') return `<span class="role role-leader" title="${esc(['Team leader', ...others].join(' · '))}">TL</span>`;
+    if (p.teamRole === 'supervisor') return `<span class="role role-sup" title="${esc(['Supervisor', ...others].join(' · '))}">SUP</span>`;
+    if (!others.length) return '';
+    // Only holds a position in another team: a "+" badge naming it.
+    const leadsOther = (p.positions || []).some((x) => x.teamId !== p.teamId && x.role === 'leader');
+    return `<span class="role ${leadsOther ? 'role-leader' : 'role-sup'}" title="${esc(others.join(' · '))}">+${leadsOther ? 'TL' : 'SUP'}</span>`;
+  };
   /** On-duty count for a team on a date, and whether its team leader / a supervisor is on duty. */
   function teamDay(g, d) {
     let n = 0;
     let leader = false;
     let sups = 0;
-    for (const p of g.members || g.people) {
+    for (const p of g.people) if (onDuty(data.cells.get(`${p.id}|${d}`)?.c ?? '')) n++;
+    for (const { p, role } of g.leads || []) {
       if (!onDuty(data.cells.get(`${p.id}|${d}`)?.c ?? '')) continue;
-      if (g.people.includes(p)) n++;
-      if (p.teamRole === 'leader') leader = true;
-      if (p.teamRole === 'supervisor') sups++;
+      if (role === 'leader') leader = true;
+      else sups++;
     }
-    const hasRoles = (g.members || g.people).some((p) => p.teamRole);
+    const hasRoles = (g.leads || []).length > 0;
     return { n, leader, sups, noSupervision: hasRoles && n > 0 && !leader && !sups };
   }
   const countTitle = (t, x, locked) =>
@@ -301,8 +312,8 @@ export async function render(root) {
       const days = dates.map((d) => teamDay(g, d));
       const counts = days.map((x) => x.n);
       counts.forEach((n, ci) => (totals[ci] += n));
-      const leader = g.members?.find((p) => p.teamRole === 'leader');
-      const sups = (g.members || []).filter((p) => p.teamRole === 'supervisor');
+      const leader = (g.leads || []).find((x) => x.role === 'leader')?.p;
+      const sups = (g.leads || []).filter((x) => x.role === 'supervisor').map((x) => x.p);
       const roleLine = [leader ? `TL ${leader.initials || leader.name}` : null, sups.length ? `${sups.length} SUP` : null].filter(Boolean).join(' · ');
       const roleTitle = [leader ? `Team leader: ${leader.name}` : 'No team leader set', sups.length ? `Supervisors: ${sups.map((p) => p.name).join(', ')}` : 'No supervisors set'].join('\n');
       const allMembers = data.people.filter((p) => p.teamId === t.id).length;

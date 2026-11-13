@@ -2,19 +2,25 @@
 // doing that day (appointments, driving, paperwork...). Changing a posting never changes the plan.
 import { tx, audit } from './db.js';
 import { daysBetween, isValidIso } from './dates.js';
-import { canEditPostings, normalisePosting } from './postings-rules.js';
+import { canEditPostings, canViewPostings, normalisePosting } from './postings-rules.js';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
 export function registerPostingRoutes(app, { db, staff, planner, json, wrap, HttpError, broadcast }) {
   const bad = (m) => new HttpError(400, m);
   const viewerOf = (u) => {
-    const p = u.personId ? db.prepare('SELECT team_id, team_role FROM people WHERE id = ?').get(u.personId) : null;
-    return { role: u.role, teamId: p?.team_id ?? null, teamRole: p?.team_role ?? null };
+    const p = u.personId ? db.prepare('SELECT team_id FROM people WHERE id = ?').get(u.personId) : null;
+    const positions = u.personId ? db.prepare('SELECT team_id AS teamId, role FROM team_positions WHERE person_id = ?').all(u.personId) : [];
+    return { role: u.role, teamId: p?.team_id ?? null, positions };
   };
   const editableTeams = (u) => {
     const v = viewerOf(u);
     return db.prepare('SELECT id FROM teams').all().map((t) => t.id).filter((id) => canEditPostings(v, id));
+  };
+  // Postings are private to each team: you see your own team's, plus any team you lead or supervise.
+  const visibleTeams = (u) => {
+    const v = viewerOf(u);
+    return db.prepare('SELECT id FROM teams').all().map((t) => t.id).filter((id) => canViewPostings(v, id));
   };
   const listTypes = () =>
     db.prepare('SELECT id, name, color, sort_order AS sortOrder, active FROM posting_types ORDER BY active DESC, sort_order, name').all().map((t) => ({ ...t, active: !!t.active }));
@@ -85,12 +91,16 @@ export function registerPostingRoutes(app, { db, staff, planner, json, wrap, Htt
     const person = req.query.person ? Number(req.query.person) : null;
     const rows = db
       .prepare(
-        `SELECT p.person_id AS personId, p.date, p.type_id AS typeId, p.time, p.detail, p.updated_at AS updatedAt, COALESCE(up.name, u.username) AS updatedBy
-         FROM postings p LEFT JOIN users u ON u.id = p.updated_by LEFT JOIN people up ON up.id = u.person_id
+        `SELECT p.person_id AS personId, p.date, p.type_id AS typeId, p.time, p.detail, p.updated_at AS updatedAt, COALESCE(up.name, u.username) AS updatedBy, pe.team_id AS teamId
+         FROM postings p JOIN people pe ON pe.id = p.person_id LEFT JOIN users u ON u.id = p.updated_by LEFT JOIN people up ON up.id = u.person_id
          WHERE p.date BETWEEN ? AND ?${person ? ' AND p.person_id = ?' : ''} ORDER BY p.date`,
       )
       .all(...[from, to, ...(person ? [person] : [])]);
-    res.json({ postings: rows, editableTeams: editableTeams(req.user) });
+    const visible = new Set(visibleTeams(req.user));
+    // Everyone can see their own postings, whichever team they are in.
+    const mine = (r) => req.user.personId != null && r.personId === req.user.personId;
+    const postings = rows.filter((r) => mine(r) || visible.has(r.teamId)).map(({ teamId, ...r }) => r);
+    res.json({ postings, editableTeams: editableTeams(req.user), visibleTeams: [...visible] });
   });
 
   // PUT { date, changes: [{ personId, typeId, time, detail }] } - empty change clears the posting.

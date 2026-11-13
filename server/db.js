@@ -122,6 +122,16 @@ CREATE TABLE IF NOT EXISTS leave_lockdowns (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Team leader / supervisor positions. A person can hold positions in several teams
+-- (people.team_role mirrors their position in their own team, for display).
+CREATE TABLE IF NOT EXISTS team_positions (
+  team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('leader','supervisor')),
+  PRIMARY KEY (team_id, person_id)
+);
+CREATE INDEX IF NOT EXISTS team_positions_person ON team_positions(person_id);
+
 CREATE TABLE IF NOT EXISTS posting_types (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -190,6 +200,9 @@ function migrate(db) {
   if (!cols.has('start_date')) db.exec('ALTER TABLE people ADD COLUMN start_date TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS people_email ON people(email COLLATE NOCASE) WHERE email IS NOT NULL');
   if (!cols.has('team_role')) db.exec('ALTER TABLE people ADD COLUMN team_role TEXT');
+  // Positions recorded before multi-team positions existed move into team_positions.
+  if (db.prepare('SELECT COUNT(*) AS n FROM team_positions').get().n === 0)
+    db.exec("INSERT OR IGNORE INTO team_positions (team_id, person_id, role) SELECT team_id, id, team_role FROM people WHERE team_role IN ('leader','supervisor') AND team_id IS NOT NULL");
   if (!cols.has('line_manager_id')) db.exec('ALTER TABLE people ADD COLUMN line_manager_id INTEGER REFERENCES people(id) ON DELETE SET NULL');
   const ucols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
   if (!ucols.has('leave_admin')) db.exec('ALTER TABLE users ADD COLUMN leave_admin INTEGER NOT NULL DEFAULT 0');

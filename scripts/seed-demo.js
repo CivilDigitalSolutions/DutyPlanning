@@ -8,6 +8,7 @@ import { hashPassword } from '../server/auth.js';
 import { addDays, eachDate } from '../server/dates.js';
 import { exportWorkbook } from '../server/spreadsheet.js';
 import { ukBankHolidays } from '../server/holidays.js';
+import { setPosition } from '../server/positions.js';
 
 const db = openDb(process.env.DB_FILE || './data/dutyplanning.db');
 const FIRST = ['Alex', 'Sam', 'Jordan', 'Chris', 'Taylor', 'Morgan', 'Jamie', 'Robin', 'Casey', 'Drew', 'Avery', 'Riley', 'Quinn', 'Charlie', 'Frankie', 'Harper', 'Jesse', 'Kai', 'Lee', 'Max'];
@@ -21,7 +22,7 @@ const from = addDays(today, -14);
 const to = addDays(today, 120);
 
 tx(db, () => {
-  db.exec('DELETE FROM leave_lockdowns; DELETE FROM leave_events; DELETE FROM leave_requests; DELETE FROM assignments; DELETE FROM person_accreditations; DELETE FROM people; DELETE FROM teams; DELETE FROM accreditations;');
+  db.exec('DELETE FROM team_positions; DELETE FROM leave_lockdowns; DELETE FROM leave_events; DELETE FROM leave_requests; DELETE FROM assignments; DELETE FROM person_accreditations; DELETE FROM people; DELETE FROM teams; DELETE FROM accreditations;');
   const accs = [
     ['FA', 'First Aid'],
     ['DRV', 'Response Driver'],
@@ -72,15 +73,18 @@ tx(db, () => {
   const y = Number(today.slice(0, 4));
   for (const h of [...ukBankHolidays(y), ...ukBankHolidays(y + 1)]) db.prepare('INSERT OR IGNORE INTO public_holidays (date, name) VALUES (?,?)').run(h.date, h.name);
 
+  const pid0 = (sn) => db.prepare('SELECT id FROM people WHERE staff_number = ?').get(sn).id;
   // Line managers: the first person in each team manages the rest; team leads report to no one (admins approve).
   for (const t of db.prepare('SELECT id FROM teams').all()) {
     const members = db.prepare('SELECT id FROM people WHERE team_id = ? ORDER BY sort_order').all(t.id);
     const lead = members[0]?.id;
     for (const m of members.slice(1)) db.prepare('UPDATE people SET line_manager_id = ? WHERE id = ?').run(lead, m.id);
     // Team positions: the first person leads the team; the next two are supervisors.
-    if (lead) db.prepare("UPDATE people SET team_role = 'leader' WHERE id = ?").run(lead);
-    for (const m of members.slice(1, 3)) db.prepare("UPDATE people SET team_role = 'supervisor' WHERE id = ?").run(m.id);
+    if (lead) setPosition(db, t.id, lead, 'leader');
+    for (const m of members.slice(1, 3)) setPosition(db, t.id, m.id, 'supervisor');
   }
+  // Alex Smith (1001), Team 1's team leader, also supervises Team 2: sees both teams' postings.
+  setPosition(db, db.prepare("SELECT id FROM teams WHERE name = 'Team 2'").get().id, pid0('1001'), 'supervisor');
   // One day where Team 3's leader and supervisors are all on leave while the team works,
   // to show the "no team leader or supervisor on duty" warning on the plan.
   {

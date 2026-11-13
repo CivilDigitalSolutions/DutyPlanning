@@ -1,13 +1,18 @@
 // Daily postings rules, shared by the server and the browser demo build.
 
 /**
- * Who may set a team's daily postings: planners and admins for any team; a team's
- * team leader and supervisors for their own team.
- * viewer: { role, teamRole, teamId } (teamRole/teamId of the viewer's own person record)
+ * Who may set a team's daily postings: planners and admins for any team; a team's team leader
+ * and supervisors (who may lead or supervise several teams) for those teams.
+ * viewer: { role, teamId (their own team), positions: [{ teamId, role }] }
  */
 export function canEditPostings(viewer, teamId) {
   if (viewer.role === 'planner' || viewer.role === 'admin') return true;
-  return teamId != null && viewer.teamId === teamId && (viewer.teamRole === 'leader' || viewer.teamRole === 'supervisor');
+  return teamId != null && (viewer.positions || []).some((p) => p.teamId === teamId);
+}
+
+/** Who may see a team's daily postings: planners/admins, its own members, and its team leader and supervisors. */
+export function canViewPostings(viewer, teamId) {
+  return canEditPostings(viewer, teamId) || (teamId != null && viewer.teamId === teamId);
 }
 
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;

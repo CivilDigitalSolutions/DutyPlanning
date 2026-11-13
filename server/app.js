@@ -25,6 +25,7 @@ import { parseUserRows, templateCsv, ROLES } from './user-import.js';
 import { applyUserImport, userTemplateWorkbook } from './users-io.js';
 import { registerLeaveRoutes } from './leave.js';
 import { registerPostingRoutes } from './postings.js';
+import { positionsByPerson, replaceTeamPositions, setPosition } from './positions.js';
 import { REGIONS, ukBankHolidays } from './holidays.js';
 import { buildIcs } from './ics.js';
 
@@ -192,9 +193,9 @@ export function createApp(db, config = {}) {
       .prepare(
         `SELECT t.id, t.name, t.sort_order AS sortOrder, t.establishment, t.min_strength AS minStrength, t.color,
                 (SELECT COUNT(*) FROM people p WHERE p.team_id = t.id AND p.active = 1) AS strength,
-                (SELECT p.id FROM people p WHERE p.team_id = t.id AND p.active = 1 AND p.team_role = 'leader' LIMIT 1) AS leaderId,
-                (SELECT p.name FROM people p WHERE p.team_id = t.id AND p.active = 1 AND p.team_role = 'leader' LIMIT 1) AS leaderName,
-                (SELECT group_concat(p.name, ', ') FROM people p WHERE p.team_id = t.id AND p.active = 1 AND p.team_role = 'supervisor') AS supervisorNames
+                (SELECT p.id FROM team_positions tp JOIN people p ON p.id = tp.person_id WHERE tp.team_id = t.id AND p.active = 1 AND tp.role = 'leader' LIMIT 1) AS leaderId,
+                (SELECT p.name FROM team_positions tp JOIN people p ON p.id = tp.person_id WHERE tp.team_id = t.id AND p.active = 1 AND tp.role = 'leader' LIMIT 1) AS leaderName,
+                (SELECT group_concat(p.name, ', ') FROM team_positions tp JOIN people p ON p.id = tp.person_id WHERE tp.team_id = t.id AND p.active = 1 AND tp.role = 'supervisor') AS supervisorNames
          FROM teams t ORDER BY t.sort_order, t.name`,
       )
       .all();
@@ -243,8 +244,10 @@ export function createApp(db, config = {}) {
     for (const r of db.prepare('SELECT person_id, accreditation_id, value, expires FROM person_accreditations').all()) {
       (acc[r.person_id] ??= {})[r.accreditation_id] = r.expires ? { v: r.value, e: r.expires } : { v: r.value };
     }
+    const positions = positionsByPerson(db);
     for (const p of people) {
       p.acc = acc[p.id] || {};
+      p.positions = positions.get(p.id) || [];
       const canSeeMobile =
         isPlanner || p.id === me?.id || cfg.mobileVisibility === 'all' || (cfg.mobileVisibility === 'team' && me && me.team_id && me.team_id === p.teamId);
       if (!canSeeMobile) {
@@ -443,16 +446,15 @@ export function createApp(db, config = {}) {
     wrap((req, res) => {
       const teamId = Number(req.params.id);
       if (!db.prepare('SELECT 1 FROM teams WHERE id = ?').get(teamId)) throw new HttpError(404, 'Team not found');
-      const members = new Set(db.prepare('SELECT id FROM people WHERE team_id = ?').all(teamId).map((p) => p.id));
+      const known = new Set(db.prepare('SELECT id FROM people WHERE active = 1').all().map((p) => p.id));
       const leaderId = req.body?.leaderId == null || req.body.leaderId === '' ? null : Number(req.body.leaderId);
       const supervisorIds = [...new Set((req.body?.supervisorIds || []).map(Number))];
       for (const id of [leaderId, ...supervisorIds].filter((x) => x != null))
-        if (!members.has(id)) throw bad('Team leader and supervisors must be members of the team');
+        if (!known.has(id)) throw bad('Unknown person');
       if (leaderId != null && supervisorIds.includes(leaderId)) throw bad('The team leader cannot also be a supervisor');
       tx(db, () => {
-        db.prepare('UPDATE people SET team_role = NULL WHERE team_id = ?').run(teamId);
-        if (leaderId != null) db.prepare("UPDATE people SET team_role = 'leader' WHERE id = ?").run(leaderId);
-        for (const id of supervisorIds) db.prepare("UPDATE people SET team_role = 'supervisor' WHERE id = ?").run(id);
+        // Team leaders and supervisors can come from any team (someone may supervise several).
+        replaceTeamPositions(db, teamId, leaderId, supervisorIds);
         audit(db, req.user, 'team.roles', { id: teamId, leaderId, supervisorIds });
       });
       broadcast({ type: 'meta' });
@@ -462,6 +464,7 @@ export function createApp(db, config = {}) {
 
   // ---------------- People ----------------
   app.get('/api/people', planner, (req, res) => {
+    const positions = positionsByPerson(db);
     const people = db
       .prepare(
         `SELECT p.id, p.staff_number AS staffNumber, p.name, p.initials, p.mobile, p.email, p.job_title AS jobTitle, p.start_date AS startDate,
@@ -472,7 +475,7 @@ export function createApp(db, config = {}) {
          ORDER BY p.active DESC, t.id IS NULL, t.sort_order, t.name, p.sort_order, p.name`,
       )
       .all()
-      .map((p) => ({ ...p, active: !!p.active }));
+      .map((p) => ({ ...p, active: !!p.active, positions: positions.get(p.id) || [] }));
     res.json({ people });
   });
   const personBody = (b, selfId = null) => {
@@ -512,11 +515,12 @@ export function createApp(db, config = {}) {
     if (!TEAM_ROLES.includes(v)) throw bad('Team role must be team leader, supervisor or none');
     return v;
   };
-  // A team has one team leader: making someone leader steps the previous one down.
-  const oneLeader = (personId) => {
+  // "Team position" on a person's record is their position in their own team. A new team leader
+  // replaces the old one. Moving someone to another team drops their position in the old one.
+  const savePosition = (personId, oldTeamId) => {
     const p = db.prepare('SELECT team_id, team_role FROM people WHERE id = ?').get(personId);
-    if (p?.team_role === 'leader' && p.team_id)
-      db.prepare("UPDATE people SET team_role = NULL WHERE team_id = ? AND team_role = 'leader' AND id <> ?").run(p.team_id, personId);
+    if (oldTeamId != null && oldTeamId !== p.team_id) setPosition(db, oldTeamId, personId, null);
+    if (p.team_id != null) setPosition(db, p.team_id, personId, p.team_role);
   };
   const uniqueGuard = (fn, msg) => {
     try {
@@ -542,7 +546,7 @@ export function createApp(db, config = {}) {
           ),
         'That staff number or email is already used by someone else',
       );
-      oneLeader(id);
+      savePosition(id, null);
       audit(db, req.user, 'person.create', { id, staffNumber: req.body.staffNumber });
       broadcast({ type: 'meta' });
       res.json({ id });
@@ -553,6 +557,7 @@ export function createApp(db, config = {}) {
     planner,
     json,
     wrap((req, res) => {
+      const oldTeamId = db.prepare('SELECT team_id FROM people WHERE id = ?').get(Number(req.params.id))?.team_id ?? null;
       const r = uniqueGuard(
         () =>
           db
@@ -563,7 +568,7 @@ export function createApp(db, config = {}) {
         'That staff number or email is already used by someone else',
       );
       if (!r.changes) throw new HttpError(404, 'Person not found');
-      oneLeader(Number(req.params.id));
+      savePosition(Number(req.params.id), oldTeamId);
       audit(db, req.user, 'person.update', { id: req.params.id });
       broadcast({ type: 'meta' });
       res.json({ ok: true });

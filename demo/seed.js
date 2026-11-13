@@ -84,6 +84,10 @@ export function seedDemo(today) {
     if (members[0]) members[0].teamRole = 'leader';
     for (const m of members.slice(1, 3)) m.teamRole = 'supervisor';
   }
+  // Team positions (people.teamRole mirrors the position in their own team).
+  db.positions = db.people.filter((p) => p.teamRole).map((p) => ({ teamId: p.teamId, personId: p.id, role: p.teamRole }));
+  // Alex Smith (1001), Team 1's team leader, also supervises Team 2.
+  db.positions.push({ teamId: db.teams.find((t) => t.name === 'Team 2').id, personId: db.people.find((p) => p.staffNumber === '1001').id, role: 'supervisor' });
   {
     const t3 = db.teams.find((t) => t.name === 'Team 3').id;
     const leads = db.people.filter((p) => p.teamId === t3 && p.teamRole);

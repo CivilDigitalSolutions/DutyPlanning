@@ -129,6 +129,12 @@ async function people(body, params) {
           <option value="supervisor" ${p?.teamRole === 'supervisor' ? 'selected' : ''}>Supervisor</option>
           <option value="leader" ${p?.teamRole === 'leader' ? 'selected' : ''}>Team leader (replaces the current one)</option>
         </select></label>
+        ${(p?.positions || []).some((x) => x.teamId !== p.teamId)
+          ? html`<p class="span2 muted small">Also ${(p.positions || [])
+              .filter((x) => x.teamId !== p.teamId)
+              .map((x) => `${x.role === 'leader' ? 'team leader' : 'supervisor'} of ${state.teamMap.get(x.teamId)?.name || 'another team'}`)
+              .join(', ')} (change under Manage → Teams).</p>`
+          : ''}
                 <label>Position in team<input name="sortOrder" type="number" value="${p?.sortOrder ?? 0}" /></label>
         <label class="check span2"><input type="checkbox" name="active" ${!p || p.active ? 'checked' : ''} /> Active (shown on the plan)</label>
         ${state.meta.accreditations.length
@@ -231,6 +237,30 @@ async function simpleCrud(body, { title, rows, columns, fields, keyOf, create, u
 async function teams(body) {
   let { people: ppl } = await get('/people');
   const membersOf = (t) => ppl.filter((p) => p.teamId === t.id && p.active);
+  const roleIn = (p, t) => (p.positions || []).find((x) => x.teamId === t.id)?.role;
+  const teamName = (p) => state.teamMap.get(p.teamId)?.name || 'No team';
+  const otherTeams = (t) => {
+    const groups = new Map();
+    for (const p of ppl.filter((x) => x.active && x.teamId !== t.id)) {
+      const k = teamName(p);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(p);
+    }
+    return [...groups];
+  };
+  // "Add a supervisor from another team" adds a ticked box to the dialog.
+  if (!teams.bound) {
+    teams.bound = true;
+    document.addEventListener('change', (e) => {
+      const sel = e.target.closest?.('[data-add-sup]');
+      if (!sel || !sel.value) return;
+      const opt = sel.selectedOptions[0];
+      const box = sel.closest('fieldset').querySelector('[data-other-sups]');
+      if (!box.querySelector(`input[value="${sel.value}"]`) && !sel.closest('fieldset').querySelector(`input[name=sup][value="${sel.value}"]`))
+        box.insertAdjacentHTML('beforeend', String(html`<label class="check"><input type="checkbox" name="sup" value="${sel.value}" checked /> ${opt.dataset.label} <small class="muted">${opt.dataset.team}</small></label>`));
+      sel.value = '';
+    });
+  }
   return simpleCrud(body, {
     title: 'Teams',
     addLabel: 'Add team',
@@ -253,18 +283,29 @@ async function teams(body) {
       <label>Display order<input name="sortOrder" type="number" value="${t?.sortOrder ?? state.meta.teams.length}" /></label>
       <p class="span2 muted">Vacant posts (establishment minus people in the team) are shown as empty rows on the plan.</p>
       ${t
-        ? membersOf(t).length
-          ? html`<fieldset class="span2"><legend>Team positions</legend>
-              <label>Team leader <small class="muted">(one per team, senior to supervisors)</small>
-                <select name="leaderId"><option value="">None</option>${membersOf(t).map((p) => html`<option value="${p.id}" ${p.teamRole === 'leader' ? 'selected' : ''}>${p.name} (${p.staffNumber})</option>`)}</select></label>
-              <p class="muted small">Supervisors</p>
-              <div class="sup-picks">${membersOf(t).map(
-                (p) => html`<label class="check"><input type="checkbox" name="sup" value="${p.id}" ${p.teamRole === 'supervisor' ? 'checked' : ''} /> ${p.name}</label>`,
-              )}</div>
-              <p class="muted small">They're listed first in the team on the plan, with TL and SUP badges.</p>
-            </fieldset>`
-          : html`<p class="span2 muted">Add people to this team to choose its team leader and supervisors.</p>`
-        : html`<p class="span2 muted">Save the team and add people to it, then choose its team leader and supervisors here.</p>`}
+        ? html`<fieldset class="span2"><legend>Team positions</legend>
+            <label>Team leader <small class="muted">(one per team, senior to supervisors; can be from another team)</small>
+              <select name="leaderId"><option value="">None</option>
+                <optgroup label="${t.name}">${membersOf(t).map((p) => html`<option value="${p.id}" ${roleIn(p, t) === 'leader' ? 'selected' : ''}>${p.name} (${p.staffNumber})</option>`)}</optgroup>
+                ${otherTeams(t).map(
+                  ([tn, list]) => html`<optgroup label="${tn}">${list.map((p) => html`<option value="${p.id}" ${roleIn(p, t) === 'leader' ? 'selected' : ''}>${p.name} (${p.staffNumber})</option>`)}</optgroup>`,
+                )}
+              </select></label>
+            <p class="muted small">Supervisors from ${t.name}</p>
+            <div class="sup-picks">${membersOf(t).map(
+              (p) => html`<label class="check"><input type="checkbox" name="sup" value="${p.id}" ${roleIn(p, t) === 'supervisor' ? 'checked' : ''} /> ${p.name}</label>`,
+            )}</div>
+            <p class="muted small">Supervisors from other teams</p>
+            <div class="sup-picks" data-other-sups>${ppl
+              .filter((p) => p.active && p.teamId !== t.id && roleIn(p, t) === 'supervisor')
+              .map((p) => html`<label class="check"><input type="checkbox" name="sup" value="${p.id}" checked /> ${p.name} <small class="muted">${teamName(p)}</small></label>`)}</div>
+            <label>Add a supervisor from another team
+              <select data-add-sup><option value="">Choose…</option>${otherTeams(t).map(
+                ([tn, list]) => html`<optgroup label="${tn}">${list.map((p) => html`<option value="${p.id}" data-label="${p.name}" data-team="${tn}">${p.name}</option>`)}</optgroup>`,
+              )}</select></label>
+            <p class="muted small">Team leaders and supervisors can set this team's daily postings and see them. Someone who leads or supervises several teams sees all of them.</p>
+          </fieldset>`
+        : html`<p class="span2 muted">Save the team, then choose its team leader and supervisors here.</p>`}
     </div>`,
     create: (v) => post('/teams', v),
     update: async (t, v, form) => {

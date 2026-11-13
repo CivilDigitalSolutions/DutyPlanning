@@ -177,7 +177,7 @@ test('team leader and supervisors: set per team, one leader, shown on the roster
   const staff = await login('100');
   // Team 1 has people 1 (Ann) and 2 (Bob); person 3 (Cat) is in Team 2.
   assert.equal((await staff('/teams/1/roles', { method: 'PUT', body: { leaderId: 1 } })).status, 403);
-  assert.equal((await plan('/teams/1/roles', { method: 'PUT', body: { leaderId: 3 } })).status, 400, 'leader must be in the team');
+  assert.equal((await plan('/teams/1/roles', { method: 'PUT', body: { leaderId: 999 } })).status, 400, 'unknown person');
   assert.equal((await plan('/teams/1/roles', { method: 'PUT', body: { leaderId: 1, supervisorIds: [1] } })).status, 400, 'not both');
   assert.equal((await plan('/teams/1/roles', { method: 'PUT', body: { leaderId: 1, supervisorIds: [2] } })).status, 200);
 
