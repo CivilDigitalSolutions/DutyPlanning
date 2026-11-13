@@ -12,9 +12,9 @@ import { dialog, html, todayIso, toast, addDays } from '../public/js/util.js';
 import { buildPlanWorkbook, buildUserTemplate } from '../server/workbooks.js';
 import { buildIcs } from '../server/ics.js';
 import { canEditPostings, canViewPostings, normalisePosting } from '../server/postings-rules.js';
-import { DEFAULT_POSTING_TYPES } from '../server/posting-types.js';
+import { DEFAULT_POSTING_TYPES, shortCode } from '../server/posting-types.js';
 
-const KEY = 'dp-demo-v11';
+const KEY = 'dp-demo-v12';
 const RANK = { staff: 1, planner: 2, admin: 3 };
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -1068,19 +1068,20 @@ on('DELETE', '/lockdowns/:id', ({ params }) => {
 });
 
 // ---------------- Daily postings (same behaviour as server/postings.js) ----------------
-db.postingTypes ??= DEFAULT_POSTING_TYPES.map((t, i) => ({ id: nextId(), name: t.name, color: t.color, sortOrder: i, active: true }));
+db.postingTypes ??= DEFAULT_POSTING_TYPES.map((t, i) => ({ id: nextId(), name: t.name, short: t.short, color: t.color, sortOrder: i, active: true }));
 db.postings ??= {};
 const postingViewer = (u) => {
   const p = db.people.find((x) => x.id === u.personId);
   return { role: u.role, teamId: p?.teamId ?? null, positions: u.personId ? positionsOf(u.personId) : [] };
 };
-const listPostingTypes = () => [...db.postingTypes].sort((a, b) => Number(b.active) - Number(a.active) || a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+const listPostingTypes = () => [...db.postingTypes].map((t) => ({ ...t, short: shortCode(t) })).sort((a, b) => Number(b.active) - Number(a.active) || a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 const postingTypeBody = (b) => {
   const name = s(b?.name, 60);
   if (!name) bad('Give the posting type a name');
   const color = s(b.color, 7) || '#d0d7de';
   if (!HEX.test(color)) bad('Colour must be #rrggbb');
-  return { name, color, sortOrder: Number.isInteger(Number(b.sortOrder)) ? Number(b.sortOrder) : 0, active: b.active !== false };
+  const short = s(b.short, 5).toUpperCase() || null;
+  return { name, short, color, sortOrder: Number.isInteger(Number(b.sortOrder)) ? Number(b.sortOrder) : 0, active: b.active !== false };
 };
 on('GET', '/posting-types', () => {
   need('staff');
@@ -1141,8 +1142,6 @@ on('GET', '/postings', ({ query }) => {
 });
 on('PUT', '/postings', ({ body }) => {
   const u = need('staff');
-  const date = body?.date;
-  if (!isValidIso(date)) bad('Choose a date');
   const changes = body?.changes;
   if (!Array.isArray(changes) || !changes.length) bad('Nothing to save');
   const v = postingViewer(u);
@@ -1150,6 +1149,9 @@ on('PUT', '/postings', ({ body }) => {
   for (const ch of changes) {
     const { posting, error, empty } = normalisePosting(ch);
     if (error) bad(error);
+    // Each change may carry its own date (the plan grid edits several days at once).
+    const date = ch.date || body?.date;
+    if (!isValidIso(date)) bad('Choose a date');
     const person = db.people.find((p) => p.id === posting.personId) || bad('Unknown person');
     if (!canEditPostings(v, person.teamId)) fail(403, "Only that team's team leader, supervisors or a planner can change its postings");
     if (posting.typeId != null && !db.postingTypes.some((t) => t.id === posting.typeId)) bad('Unknown posting type');
@@ -1158,8 +1160,9 @@ on('PUT', '/postings', ({ body }) => {
     else next[k] = { typeId: posting.typeId, time: posting.time, detail: posting.detail, updatedBy: personNameOrUser(u), updatedAt: new Date().toISOString() };
   }
   db.postings = next;
-  audit(u, 'postings.update', { date, count: changes.length });
-  changed({ type: 'postings', from: date, to: date });
+  const dates = changes.map((ch) => ch.date || body.date).sort();
+  audit(u, 'postings.update', { date: dates[0], to: dates.at(-1), count: changes.length });
+  changed({ type: 'postings', from: dates[0], to: dates.at(-1) });
   return { ok: true, count: changes.length };
 });
 on('POST', '/postings/copy', ({ body }) => {

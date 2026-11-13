@@ -131,3 +131,21 @@ test('postings are private to each team; leaders/supervisors of several teams se
   const team2 = (await plan('/roster?from=2031-03-03&to=2031-03-03')).body.teams.find((t) => t.id === 2);
   assert.equal(team2.supervisorNames, 'Sid Super');
 });
+
+test('postings for several days at once, and short codes for posting types', async () => {
+  const tess = await as('tess');
+  const plan = await as('plan');
+  const types = (await plan('/posting-types')).body.types;
+  assert.equal(types.find((t) => t.name === 'Response driver').short, 'DRV');
+  const id = (await plan('/posting-types', { name: 'Scene watch', short: 'scw' })).body.id;
+  assert.equal((await plan('/posting-types')).body.types.find((t) => t.id === id).short, 'SCW');
+  const pat = types.find((t) => t.name === 'Patrol').id;
+  const r = await tess('/postings', { changes: [{ personId: 3, date: '2031-03-03', typeId: pat }, { personId: 3, date: '2031-03-04', typeId: pat }] }, 'PUT');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const got = (await tess('/postings?from=2031-03-03&to=2031-03-04&person=3')).body.postings.map((p) => [p.date, p.typeId]);
+  assert.deepEqual(got, [
+    ['2031-03-03', pat],
+    ['2031-03-04', pat],
+  ]);
+  assert.equal((await tess('/postings', { changes: [{ personId: 3, typeId: pat }] }, 'PUT')).status, 400, 'a date is needed');
+});

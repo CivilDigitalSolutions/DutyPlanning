@@ -135,6 +135,7 @@ CREATE INDEX IF NOT EXISTS team_positions_person ON team_positions(person_id);
 CREATE TABLE IF NOT EXISTS posting_types (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  short TEXT,
   color TEXT NOT NULL DEFAULT '#d0d7de',
   sort_order INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1
@@ -186,14 +187,19 @@ export function openDb(file) {
     DEFAULT_DUTY_CODES.filter((c) => c.code === 'RD-AL' || c.code === 'PH-AL').forEach((c, i) => add.run(c.code, c.label, c.category, c.color, order + i + 1));
   }
   if (db.prepare('SELECT COUNT(*) AS n FROM posting_types').get().n === 0) {
-    const ins = db.prepare('INSERT INTO posting_types (name, color, sort_order) VALUES (?,?,?)');
-    DEFAULT_POSTING_TYPES.forEach((t, i) => ins.run(t.name, t.color, i));
+    const ins = db.prepare('INSERT INTO posting_types (name, short, color, sort_order) VALUES (?,?,?,?)');
+    DEFAULT_POSTING_TYPES.forEach((t, i) => ins.run(t.name, t.short, t.color, i));
   }
   return db;
 }
 
 /** Add columns introduced after the first release to existing databases. */
 function migrate(db) {
+  const ptcols = new Set(db.prepare('PRAGMA table_info(posting_types)').all().map((c) => c.name));
+  if (!ptcols.has('short')) {
+    db.exec('ALTER TABLE posting_types ADD COLUMN short TEXT');
+    for (const t of DEFAULT_POSTING_TYPES) db.prepare('UPDATE posting_types SET short = ? WHERE name = ? AND short IS NULL').run(t.short, t.name);
+  }
   const cols = new Set(db.prepare('PRAGMA table_info(people)').all().map((c) => c.name));
   if (!cols.has('email')) db.exec('ALTER TABLE people ADD COLUMN email TEXT');
   if (!cols.has('job_title')) db.exec('ALTER TABLE people ADD COLUMN job_title TEXT');

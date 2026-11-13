@@ -1950,3 +1950,29 @@ td.hol-date {
   border-width: 6px 0 0 6px;
   border-color: transparent transparent transparent var(--primary);
 }
+
+/* Plan grid: postings view */
+.grid.postings td.pc.unposted {
+  color: var(--muted);
+  font-weight: 500;
+  opacity: 0.75;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.grid.postings td.pc.off {
+  color: var(--muted);
+  font-weight: 400;
+  opacity: 0.4;
+}
+.grid.postings td.pc.offwarn {
+  outline: 2px dashed var(--warn);
+  outline-offset: -3px;
+}
+.grid.postings td.pc.note::after {
+  border-color: transparent var(--primary) transparent transparent;
+}
+.grid td.cnt.unposted-cnt {
+  color: var(--warn);
+}
+.grid.postings td.cnt {
+  font-size: 10px;
+}

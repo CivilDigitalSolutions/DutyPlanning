@@ -333,11 +333,13 @@ async function postingtypes(body) {
     keyOf: (t) => t.id,
     columns: [
       ['Posting', chip],
+      ['Short code', (t) => t.short],
       ['Order', (t) => t.sortOrder],
       ['In use', (t) => (t.active ? 'Yes' : html`<span class="muted">Hidden</span>`)],
     ],
     fields: (t) => html`<div class="form-grid">
-      <label class="span2">Name<input name="name" value="${t?.name || ''}" required maxlength="60" placeholder="e.g. Appointments" /></label>
+      <label>Name<input name="name" value="${t?.name || ''}" required maxlength="60" placeholder="e.g. Appointments" /></label>
+      <label>Short code <small class="muted">(shown in plan cells)</small><input name="short" value="${t?.short || ''}" maxlength="5" placeholder="e.g. APPT" /></label>
       <label>Colour<input name="color" type="color" value="${t?.color || '#8ecae6'}" /></label>
       <label>Display order<input name="sortOrder" type="number" value="${t?.sortOrder ?? list.length}" /></label>
       ${t ? html`<label class="check span2"><input type="checkbox" name="active" ${t.active ? 'checked' : ''} /> Offer this posting type</label>` : ''}

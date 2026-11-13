@@ -24,8 +24,9 @@ export async function render(root) {
     showAcc: saved.showAcc ?? false,
     showStaff: saved.showStaff ?? innerWidth > 900,
     showVacant: saved.showVacant ?? true,
+    layer: saved.layer === 'postings' ? 'postings' : 'duties', // what the grid shows and edits
   };
-  const persist = () => store.set('plan', { span: v.span, teams: v.teams, showAcc: v.showAcc, showStaff: v.showStaff, showVacant: v.showVacant });
+  const persist = () => store.set('plan', { span: v.span, teams: v.teams, showAcc: v.showAcc, showStaff: v.showStaff, showVacant: v.showVacant, layer: v.layer });
 
   let data = null;
   let dates = [];
@@ -38,6 +39,13 @@ export async function render(root) {
   let drawnGroups = [];
   let postingAt = new Map(); // "personId|date" -> daily posting
   let postingTypes = null;
+  let postEditTeams = new Set(); // teams whose postings this user may change
+  let postVisTeams = new Set(); // teams whose postings this user may see
+  const isPostings = () => v.layer === 'postings';
+  // Who can edit what's on screen: the duty plan is planners' only; a team's postings are its
+  // team leader's and supervisors' (and planners').
+  const canEditLayer = () => (isPostings() ? postEditTeams.size > 0 : planner);
+  const canEditRow = (p) => (isPostings() ? postEditTeams.has(p.teamId) : planner);
   let rowOf = new Map();
   let colOf = new Map();
   let totalEls = [];
@@ -53,6 +61,11 @@ export async function render(root) {
           <button class="btn icon-btn" data-act="next" aria-label="Next period">›</button>
           <input type="date" class="date-jump" aria-label="Jump to date" />
           <span class="range-label"></span>
+        </div>
+        <div class="group">
+          <div class="seg" role="group" aria-label="Show">
+            <button class="btn" data-layer="duties">Duties</button><button class="btn" data-layer="postings">Postings</button>
+          </div>
         </div>
         <div class="group">
           <select data-f="span" aria-label="Period length">${SPANS.map(([d, l]) => html`<option value="${d}">${l}</option>`)}</select>
@@ -165,6 +178,8 @@ export async function render(root) {
       const [roster, pd, pt] = await Promise.all([loadRoster(from, to), get(`/postings?from=${from}&to=${to}`).catch(() => ({ postings: [] })), postingTypes ? null : get('/posting-types').catch(() => ({ types: [] }))]);
       data = roster;
       if (pt) postingTypes = new Map(pt.types.map((t) => [t.id, t]));
+      postEditTeams = new Set(pd.editableTeams || []);
+      postVisTeams = new Set(pd.visibleTeams || []);
       postingAt = new Map(pd.postings.map((x) => [`${x.personId}|${x.date}`, x]));
       dates = eachDate(from, to);
       $('.range-label', root).textContent = `${fmtDate(from, 'dm')} – ${fmtDate(to, 'dmy')}`;
@@ -194,7 +209,8 @@ export async function render(root) {
   }
 
   function groups() {
-    const teams = data.teams.filter((t) => !v.teams.length || v.teams.includes(t.id));
+    // In the postings view only teams whose postings you may see are shown.
+    const teams = data.teams.filter((t) => (!v.teams.length || v.teams.includes(t.id)) && (!isPostings() || postVisTeams.has(t.id)));
     const known = new Set(data.teams.map((t) => t.id));
     const out = teams.map((t) => {
       const all = byRole(data.people.filter((p) => p.teamId === t.id));
@@ -204,7 +220,7 @@ export async function render(root) {
         .filter((x) => x.role);
       return { team: t, people: all.filter(matches), members: all, leads, vacancies: Math.max(0, t.establishment - all.length) };
     });
-    if (!v.teams.length) {
+    if (!v.teams.length && !isPostings()) {
       const orphans = data.people.filter((p) => !known.has(p.teamId)).filter(matches);
       if (orphans.length) out.push({ team: { id: 0, name: 'No team', establishment: 0 }, people: orphans, vacancies: 0 });
     }
@@ -253,7 +269,53 @@ export async function render(root) {
       .filter(Boolean)
       .join(' · ');
 
+  const onShift = (a) => !!a && a.c !== '*' && codeInfo(a.c).category === 'duty';
+  const postStyleCache = new Map();
+  const postStyle = (t) => {
+    if (!postStyleCache.has(t.id)) postStyleCache.set(t.id, `background:${t.color};color:${contrast(t.color)}`);
+    return postStyleCache.get(t.id);
+  };
+  const postLabel = (ps) => (ps.typeId != null ? postingTypes?.get(ps.typeId)?.short || '?' : '•');
+  const postTitle = (ps) => [postingTypes?.get(ps.typeId)?.name || 'Posting', ps.time, ps.detail].filter(Boolean).join(' · ');
+
+  // Postings view: the posting's short code in its colour; working but not posted shows the duty
+  // code faintly; days off are greyed out.
+  function postCellHtml(p, d, r, c) {
+    const a = data.cells.get(`${p.id}|${d}`);
+    const ps = postingAt.get(`${p.id}|${d}`);
+    let cls = 'c pc';
+    if (isWeekend(d)) cls += ' we';
+    if (data.publicHolidays?.[d]) cls += ' ph';
+    if (d === today) cls += ' td';
+    const duty = onShift(a);
+    if (ps) {
+      const t = postingTypes?.get(ps.typeId);
+      const label = postLabel(ps);
+      if (label.length > 3) cls += ' long';
+      if (ps.time || ps.detail) cls += ' note';
+      if (!duty) cls += ' offwarn';
+      const title = `${postTitle(ps)}${duty ? '' : '\nNot on duty this day'}`;
+      return `<td class="${cls}" data-r="${r}" data-c="${c}"${t ? ` style="${postStyle(t)}"` : ''} title="${esc(title)}">${esc(label)}</td>`;
+    }
+    if (duty) return `<td class="${cls} unposted" data-r="${r}" data-c="${c}" title="${esc(codeInfo(a.c).label)} - not posted">${esc(a.c)}</td>`;
+    const label = a ? (a.c === '*' ? '–' : a.c) : '';
+    return `<td class="${cls} off" data-r="${r}" data-c="${c}"${a ? ` title="${esc(a.c === '*' ? 'Unavailable' : codeInfo(a.c).label)}"` : ''}>${esc(label)}</td>`;
+  }
+  /** Postings view count: people posted / people on duty. */
+  function postCount(people, d) {
+    let on = 0;
+    let posted = 0;
+    for (const p of people) {
+      const a = data.cells.get(`${p.id}|${d}`);
+      if (!onShift(a)) continue;
+      on++;
+      if (postingAt.has(`${p.id}|${d}`)) posted++;
+    }
+    return { on, posted };
+  }
+
   function cellHtml(p, d, r, c) {
+    if (isPostings()) return postCellHtml(p, d, r, c);
     const a = data.cells.get(`${p.id}|${d}`);
     let cls = 'c';
     if (isWeekend(d)) cls += ' we';
@@ -305,6 +367,7 @@ export async function render(root) {
     personRows = [];
     drawnGroups = [];
     const totals = new Array(dates.length).fill(0);
+    const postTotals = dates.map(() => ({ on: 0, posted: 0 }));
     let body = '';
     for (const g of groups()) {
       drawnGroups.push(g);
@@ -319,7 +382,14 @@ export async function render(root) {
       const allMembers = data.people.filter((p) => p.teamId === t.id).length;
       body += `<tbody class="team"><tr class="team-row"><th class="name" scope="rowgroup"><div class="team-name" title="${esc(roleTitle)}">${esc(t.name)}</div><div class="team-meta">${allMembers}${t.establishment ? `/${t.establishment}` : ''}${g.vacancies ? ` · <span class="vac">${g.vacancies} vacant</span>` : ''}${roleLine ? ` · <span class="team-roles">${esc(roleLine)}</span>` : ''}</div></th>`;
       if (fixed > 1) body += `<td class="fx" colspan="${fixed - 1}"></td>`;
-      counts.forEach((n, ci) => {
+      if (isPostings()) {
+        dates.forEach((d, ci) => {
+          const x = postCount(g.people, d);
+          postTotals[ci].on += x.on;
+          postTotals[ci].posted += x.posted;
+          body += `<td class="cnt${isWeekend(d) ? ' we' : ''}${x.posted < x.on ? ' unposted-cnt' : ''}" title="${x.posted} of ${x.on} on duty posted">${x.on ? `${x.posted}/${x.on}` : ''}</td>`;
+        });
+      } else counts.forEach((n, ci) => {
         const low = t.minStrength != null && n < t.minStrength;
         const teamLocked = (data.lockdowns || []).some((l) => l.teamId === t.id && l.start <= dates[ci] && l.end >= dates[ci]);
         body += `<td class="cnt${low ? ' low' : ''}${isWeekend(dates[ci]) ? ' we' : ''}${teamLocked ? ' lock' : ''}${days[ci].noSupervision ? ' nosup' : ''}" title="${esc(countTitle(t, days[ci], teamLocked))}">${n}</td>`;
@@ -346,11 +416,16 @@ export async function render(root) {
       body += '</tbody>';
     }
     if (!personRows.length && !body) body = `<tbody><tr><td class="empty" colspan="${fixed + dates.length}">No people match the current filters.</td></tr></tbody>`;
-    let foot = `<tfoot><tr><th class="name">On duty</th>${fixed > 1 ? `<td class="fx" colspan="${fixed - 1}"></td>` : ''}`;
-    totals.forEach((n, ci) => (foot += `<td class="cnt${isWeekend(dates[ci]) ? ' we' : ''}">${n}</td>`));
+    let foot = `<tfoot><tr><th class="name">${isPostings() ? 'Posted / on duty' : 'On duty'}</th>${fixed > 1 ? `<td class="fx" colspan="${fixed - 1}"></td>` : ''}`;
+    if (isPostings()) postTotals.forEach((x, ci) => (foot += `<td class="cnt${isWeekend(dates[ci]) ? ' we' : ''}${x.posted < x.on ? ' unposted-cnt' : ''}">${x.on ? `${x.posted}/${x.on}` : ''}</td>`));
+    else totals.forEach((n, ci) => (foot += `<td class="cnt${isWeekend(dates[ci]) ? ' we' : ''}">${n}</td>`));
     foot += '</tr></tfoot>';
+    if (isPostings() && !drawnGroups.length)
+      body = `<tbody><tr><td class="empty" colspan="${fixed + dates.length}">Postings are private to each team - there are no teams here whose postings you can see.</td></tr></tbody>`;
     table.innerHTML = h + body + foot;
-    table.classList.toggle('editable', planner);
+    table.classList.toggle('editable', canEditLayer());
+    table.classList.toggle('postings', isPostings());
+    for (const b of root.querySelectorAll('[data-layer]')) b.classList.toggle('btn-primary', b.dataset.layer === v.layer);
     cellEls = $$('td.c', table);
     rowOf = new Map(personRows.map((p, i) => [p.id, i]));
     colOf = new Map(dates.map((d, i) => [d, i]));
@@ -379,6 +454,27 @@ export async function render(root) {
       old.replaceWith(el);
       cellEls[idx] = el;
       cols.add(c);
+    }
+    if (isPostings()) {
+      for (const c of cols) {
+        const tot = { on: 0, posted: 0 };
+        for (const g of drawnGroups) {
+          const x = postCount(g.people, dates[c]);
+          tot.on += x.on;
+          tot.posted += x.posted;
+          const el = g.cntEls?.[c];
+          if (el) {
+            el.textContent = x.on ? `${x.posted}/${x.on}` : '';
+            el.classList.toggle('unposted-cnt', x.posted < x.on);
+            el.title = `${x.posted} of ${x.on} on duty posted`;
+          }
+        }
+        if (totalEls[c]) {
+          totalEls[c].textContent = tot.on ? `${tot.posted}/${tot.on}` : '';
+          totalEls[c].classList.toggle('unposted-cnt', tot.posted < tot.on);
+        }
+      }
+      return;
     }
     for (const c of cols) {
       let total = 0;
@@ -445,7 +541,7 @@ export async function render(root) {
     if (!td || e.button > 0) return;
     const r = Number(td.dataset.r),
       c = Number(td.dataset.c);
-    if (!planner) {
+    if (!canEditLayer()) {
       setSel({ r0: r, c0: c, r1: r, c1: c });
       return;
     }
@@ -487,6 +583,7 @@ export async function render(root) {
     }
     const cells = selCells();
     sheet.hidden = false;
+    if (isPostings()) return renderPostingSheet(cells);
     if (!planner || !cells.length) {
       const { p, d } = cells[0] || {};
       if (!p) return (sheet.hidden = true);
@@ -526,6 +623,8 @@ export async function render(root) {
   }
 
   sheet.addEventListener('click', async (e) => {
+    const postBtn = e.target.closest('[data-post]');
+    if (postBtn) return applyPosting(postBtn.dataset.post ? Number(postBtn.dataset.post) : null);
     const codeBtn = e.target.closest('[data-code]');
     if (codeBtn) return applyCode(codeBtn.dataset.code || null);
     const act = e.target.closest('[data-sheet]')?.dataset.sheet;
@@ -533,7 +632,7 @@ export async function render(root) {
     else if (act === 'extend') {
       extendMode = !extendMode;
       renderSheet();
-    } else if (act === 'note') editNote();
+    } else if (act === 'note') (isPostings() ? editPostingDetail() : editNote());
     else if (act === 'undo') doUndo();
     else if (act === 'copy') {
       try {
@@ -573,7 +672,7 @@ export async function render(root) {
     try {
       await put('/assignments', { changes });
       if (record) {
-        undo.push(prev);
+        undo.push({ kind: 'duties', list: prev });
         if (undo.length > 50) undo.shift();
         renderSheet();
       }
@@ -594,9 +693,10 @@ export async function render(root) {
   }
 
   function doUndo() {
-    const prev = undo.pop();
-    if (prev) commit(prev, { record: false }).then(renderSheet);
-    else toast('Nothing to undo');
+    const last = undo.pop();
+    if (!last) return toast('Nothing to undo');
+    if (last.kind === 'postings') commitPostings(last.list, { record: false }).then(renderSheet);
+    else commit(last.list, { record: false }).then(renderSheet);
   }
 
   async function editNote() {
@@ -619,7 +719,12 @@ export async function render(root) {
     const lines = [];
     for (let r = r0; r <= r1; r++) {
       const row = [];
-      for (let c = c0; c <= c1; c++) row.push(data.cells.get(`${personRows[r].id}|${dates[c]}`)?.c ?? '');
+      for (let c = c0; c <= c1; c++) {
+        if (isPostings()) {
+          const ps = postingAt.get(`${personRows[r].id}|${dates[c]}`);
+          row.push(ps ? postingTypes?.get(ps.typeId)?.short ?? '' : '');
+        } else row.push(data.cells.get(`${personRows[r].id}|${dates[c]}`)?.c ?? '');
+      }
       lines.push(row.join('\t'));
     }
     return lines.join('\n');
@@ -627,6 +732,7 @@ export async function render(root) {
 
   function pasteText(text) {
     if (!sel || !text) return;
+    if (isPostings()) return pastePostings(text);
     const grid = text.replace(/\r/g, '').replace(/\n$/, '').split('\n').map((l) => l.split('\t').map((x) => x.trim()));
     const bad = new Set();
     const norm = grid.map((row) =>
@@ -655,11 +761,209 @@ export async function render(root) {
     commit(changes);
   }
 
+  // ---- postings view: editing ----
+  function renderPostingSheet(cells) {
+    const editable = cells.filter((x) => canEditRow(x.p));
+    if (!editable.length) {
+      const { p, d } = cells[0] || {};
+      if (!p) return (sheet.hidden = true);
+      const ps = postingAt.get(`${p.id}|${d}`);
+      const a = data.cells.get(`${p.id}|${d}`);
+      sheet.innerHTML = html`<div class="sheet-row">
+        <div><strong>${p.name}</strong><div class="muted">${fmtDate(d, 'long')}${a ? ` · ${a.c === '*' ? 'Unavailable' : codeInfo(a.c).label}` : ''}</div></div>
+        ${ps ? html`<span class="posting-tag" style="${postingTypes?.get(ps.typeId) ? postStyle(postingTypes.get(ps.typeId)) : ''}">${postingTypes?.get(ps.typeId)?.name || 'Posting'}</span>${ps.time ? html` <b>${ps.time}</b>` : ''}${ps.detail ? html` <span class="note-text">${ps.detail}</span>` : ''}` : html`<span class="muted">No posting</span>`}
+        <div class="spacer"></div><button class="btn icon-btn" data-sheet="close" aria-label="Close">✕</button></div>`;
+      return;
+    }
+    const { r0, r1, c0, c1 } = rect(sel);
+    const n = cells.length;
+    const one = n === 1 ? postingAt.get(`${cells[0].p.id}|${cells[0].d}`) : null;
+    const desc =
+      n === 1
+        ? `${cells[0].p.name} · ${fmtDate(cells[0].d, 'dow')} ${fmtDate(cells[0].d, 'dm')}`
+        : `${r1 - r0 + 1} ${r1 > r0 ? 'people' : 'person'} × ${c1 - c0 + 1} day${c1 > c0 ? 's' : ''}`;
+    const types = [...(postingTypes?.values() || [])].filter((t) => t.active).sort((a, b) => a.sortOrder - b.sortOrder);
+    sheet.innerHTML = html`
+      <div class="sheet-row">
+        <strong>${desc}</strong>
+        ${one ? html`<span class="note-text">${postTitle(one)}</span>` : ''}
+        ${editable.length < n ? html`<span class="muted small">${n - editable.length} cell${n - editable.length > 1 ? 's' : ''} in teams you can't post</span>` : ''}
+        ${typed ? html`<span class="typed">Posting: <b>${typed}</b> ⏎</span>` : ''}
+        <div class="spacer"></div>
+        <button class="btn btn-sm ${extendMode ? 'btn-primary' : ''}" data-sheet="extend" title="Tap another cell to extend the selection">Extend</button>
+        <button class="btn btn-sm" data-sheet="note">Time &amp; detail</button>
+        <button class="btn btn-sm" data-sheet="copy">Copy</button>
+        <button class="btn btn-sm" data-sheet="paste">Paste</button>
+        <button class="btn btn-sm" data-sheet="undo" ${undo.length ? '' : 'disabled'}>Undo</button>
+        <button class="btn icon-btn" data-sheet="close" aria-label="Close">✕</button>
+      </div>
+      <div class="codes">
+        ${types.map((t) => html`<button class="code-btn" data-post="${t.id}" style="${postStyle(t)}" title="${t.name}">${t.short}</button>`)}
+        <button class="code-btn clear" data-post="" title="Clear posting">Clear</button>
+      </div>`;
+  }
+
+  async function commitPostings(changes, { record = true, moveRight = false } = {}) {
+    if (!changes.length) return;
+    if (document.body.classList.contains('is-offline')) return toast('You are offline - changes cannot be saved', 'error');
+    const prev = changes.map((ch) => {
+      const cur = postingAt.get(`${ch.personId}|${ch.date}`);
+      return { personId: ch.personId, date: ch.date, typeId: cur?.typeId ?? null, time: cur?.time ?? null, detail: cur?.detail ?? null };
+    });
+    const applyLocal = (list) => {
+      for (const ch of list) {
+        const k = `${ch.personId}|${ch.date}`;
+        if (ch.typeId == null && !ch.time && !ch.detail) postingAt.delete(k);
+        else postingAt.set(k, { personId: ch.personId, date: ch.date, typeId: ch.typeId, time: ch.time || null, detail: ch.detail || null });
+      }
+      patchCells(list);
+      renderSheet();
+    };
+    applyLocal(changes);
+    if (moveRight && sel && sel.r0 === sel.r1 && sel.c0 === sel.c1 && sel.c0 < dates.length - 1) setSel({ r0: sel.r0, r1: sel.r0, c0: sel.c0 + 1, c1: sel.c0 + 1 });
+    try {
+      await put('/postings', { changes });
+      if (record) {
+        undo.push({ kind: 'postings', list: prev });
+        if (undo.length > 50) undo.shift();
+        renderSheet();
+      }
+    } catch (e) {
+      applyLocal(prev);
+      toast(e.message, 'error');
+    }
+  }
+
+  /** Give the selected cells a posting type (null clears). Only people on duty get a posting. */
+  function applyPosting(typeId, opts) {
+    let skippedTeam = 0;
+    let skippedOff = 0;
+    const changes = [];
+    for (const { p, d } of selCells()) {
+      if (!canEditRow(p)) {
+        skippedTeam++;
+        continue;
+      }
+      const cur = postingAt.get(`${p.id}|${d}`);
+      if (typeId == null) {
+        if (cur) changes.push({ personId: p.id, date: d, typeId: null, time: null, detail: null });
+        continue;
+      }
+      if (!onShift(data.cells.get(`${p.id}|${d}`))) {
+        skippedOff++;
+        continue;
+      }
+      // Changing the type keeps any time/detail already set.
+      changes.push({ personId: p.id, date: d, typeId, time: cur?.time ?? null, detail: cur?.detail ?? null });
+    }
+    const notes = [skippedOff && `${skippedOff} not on duty`, skippedTeam && `${skippedTeam} in teams you can't post`].filter(Boolean);
+    if (notes.length) toast(`Skipped ${notes.join(' and ')}`, 'warn');
+    commitPostings(changes, opts);
+  }
+
+  async function editPostingDetail() {
+    const cells = selCells().filter(({ p, d }) => canEditRow(p) && (postingAt.has(`${p.id}|${d}`) || onShift(data.cells.get(`${p.id}|${d}`))));
+    if (!cells.length) return toast('Select cells for people on duty in a team you can post', 'warn');
+    const first = postingAt.get(`${cells[0].p.id}|${cells[0].d}`) || {};
+    const d = dialog(
+      'Time and detail',
+      html`<div class="form-grid">
+        <label>Time <small class="muted">(optional)</small><input type="time" name="time" value="${first.time || ''}" /></label>
+        <span></span>
+        <label class="span2">Detail <small class="muted">(optional)</small><input name="detail" maxlength="200" value="${first.detail || ''}" placeholder="e.g. Statement - 4 Example Road" /></label>
+        <p class="span2 muted small">Applies to ${cells.length} cell${cells.length > 1 ? 's' : ''}; their posting types stay as they are.</p>
+      </div>`,
+      { actions: '<button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn btn-primary">Save</button>' },
+    );
+    const f = $('form', d);
+    f.detail.focus();
+    if ((await d.closed) !== 'ok') return;
+    commitPostings(
+      cells.map(({ p, d: date }) => ({ personId: p.id, date, typeId: postingAt.get(`${p.id}|${date}`)?.typeId ?? null, time: f.time.value || null, detail: f.detail.value.trim() || null })),
+    );
+  }
+
+  const typeByShort = (x) => {
+    const k = String(x).trim().toLowerCase();
+    return [...(postingTypes?.values() || [])].find((t) => t.short.toLowerCase() === k || t.name.toLowerCase() === k);
+  };
+  function pastePostings(text) {
+    const grid = text.replace(/\r/g, '').replace(/\n$/, '').split('\n').map((l) => l.split('\t').map((x) => x.trim()));
+    const bad = new Set();
+    const norm = grid.map((row) => row.map((x) => (x ? typeByShort(x)?.id ?? (bad.add(x), null) : null)));
+    if (bad.size) return toast(`Unknown postings: ${[...bad].slice(0, 5).join(', ')}`, 'error');
+    const { r0, r1, c0, c1 } = rect(sel);
+    const gh = norm.length,
+      gw = Math.max(...norm.map((r) => r.length));
+    const single = r0 === r1 && c0 === c1;
+    const rows = single ? gh : r1 - r0 + 1;
+    const cols = single ? gw : c1 - c0 + 1;
+    const changes = [];
+    let skipped = 0;
+    for (let i = 0; i < rows && r0 + i < personRows.length; i++)
+      for (let j = 0; j < cols && c0 + j < dates.length; j++) {
+        const p = personRows[r0 + i];
+        const d = dates[c0 + j];
+        const typeId = norm[i % gh][j % gw] ?? null;
+        if (!canEditRow(p) || (typeId != null && !onShift(data.cells.get(`${p.id}|${d}`)))) {
+          skipped++;
+          continue;
+        }
+        const cur = postingAt.get(`${p.id}|${d}`);
+        changes.push({ personId: p.id, date: d, typeId, time: typeId == null ? null : cur?.time ?? null, detail: typeId == null ? null : cur?.detail ?? null });
+      }
+    if (skipped) toast(`Skipped ${skipped} cell${skipped > 1 ? 's' : ''} (not on duty, or a team you can't post)`, 'warn');
+    setSel({ r0, c0, r1: Math.min(personRows.length - 1, r0 + rows - 1), c1: Math.min(dates.length - 1, c0 + cols - 1) });
+    commitPostings(changes);
+  }
+
+  // Typing a posting's short code (e.g. "drv") applies it, like duty codes in the duties view.
+  function postingKey(e) {
+    if (e.key === 'Delete' || (e.key === 'Backspace' && !typed)) {
+      e.preventDefault();
+      return applyPosting(null);
+    }
+    if (e.key === 'Backspace') {
+      typed = typed.slice(0, -1);
+      return renderSheet();
+    }
+    const shorts = [...(postingTypes?.values() || [])].filter((t) => t.active).map((t) => t.short.toLowerCase());
+    if (e.key === 'Enter' && typed) {
+      e.preventDefault();
+      const t = typeByShort(typed);
+      if (t) applyPosting(t.id, { moveRight: true });
+      else toast(`Unknown posting "${typed}"`, 'error');
+      typed = '';
+      return renderSheet();
+    }
+    if (/^[\w/-]$/.test(e.key)) {
+      e.preventDefault();
+      typed += e.key;
+      const k = typed.toLowerCase();
+      const exact = shorts.includes(k);
+      const longer = shorts.some((x) => x.startsWith(k) && x !== k);
+      if (exact && !longer) {
+        const t = typeByShort(k);
+        typed = '';
+        applyPosting(t.id, { moveRight: true });
+      } else renderSheet();
+    }
+  }
+
+  root.addEventListener('click', (e) => {
+    const layer = e.target.closest('[data-layer]')?.dataset.layer;
+    if (!layer || layer === v.layer) return;
+    v.layer = layer;
+    typed = '';
+    persist();
+    draw();
+  });
+
   const inField = (e) => e.target.closest('input, textarea, select, dialog, [contenteditable]');
   const onKey = (e) => {
     if (inField(e) || !sel || !data) return;
     const mod = e.ctrlKey || e.metaKey;
-    if (mod && e.key.toLowerCase() === 'z' && planner) {
+    if (mod && e.key.toLowerCase() === 'z' && canEditLayer()) {
       e.preventDefault();
       return doUndo();
     }
@@ -671,12 +975,13 @@ export async function render(root) {
       e.preventDefault();
       const r = Math.max(0, Math.min(R, sel.r1 + mv[0]));
       const c = Math.max(0, Math.min(C, sel.c1 + mv[1]));
-      setSel(e.shiftKey && planner ? { ...sel, r1: r, c1: c } : { r0: r, c0: c, r1: r, c1: c });
+      setSel(e.shiftKey && canEditLayer() ? { ...sel, r1: r, c1: c } : { r0: r, c0: c, r1: r, c1: c });
       cellEls[r * dates.length + c]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       return;
     }
     if (e.key === 'Escape') return setSel(null);
-    if (!planner) return;
+    if (!canEditLayer()) return;
+    if (isPostings()) return postingKey(e);
     if (e.key === 'Delete' || (e.key === 'Backspace' && !typed)) {
       e.preventDefault();
       return applyCode(null);
@@ -712,7 +1017,7 @@ export async function render(root) {
     toast('Copied');
   };
   const onPaste = (e) => {
-    if (inField(e) || !sel || !planner) return;
+    if (inField(e) || !sel || !canEditLayer()) return;
     e.preventDefault();
     pasteText(e.clipboardData.getData('text/plain'));
   };
@@ -733,7 +1038,10 @@ export async function render(root) {
         )}
         <h3>Team positions</h3><p class="muted"><span class="role role-leader">TL</span> team leader · <span class="role role-sup">SUP</span> supervisor ·
           a count with an amber underline means no team leader or supervisor is on duty that day.</p>
-        <h3>Daily postings</h3><p class="muted">A small blue corner on a cell means that person has a daily posting that day - hover to see it. Postings are set in the Day view.</p>
+        <h3>Daily postings</h3><p class="muted">In the <b>Duties</b> view, a small blue corner on a cell means that person has a daily posting that day - hover to see it.
+          Switch to <b>Postings</b> (top of the plan) to see and edit postings in the grid: short codes show each posting, faint codes are people on duty but not posted,
+          greyed cells are days off, and team rows show posted / on duty. Team leaders and supervisors can edit their own teams; postings are private to each team.</p>
+        ${postingTypes ? html`<ul>${[...postingTypes.values()].filter((t) => t.active).map((t) => html`<li><span class="chip" style="${postStyle(t)}">${t.short}</span> ${t.name}</li>`)}</ul>` : ''}
         <h3>Dates</h3><p class="muted"><span class="holiday-tag">Hol</span> public holiday · <span class="legend-lock"></span> leave lockdown (hover a date for its name)</p>
         <h3>Counts</h3><p class="muted">Numbers on team rows show how many people are on a duty (not rest, leave or training) each day. Red means below the team's minimum.</p>
       </div>`,
@@ -860,7 +1168,10 @@ export async function render(root) {
       renderTeamFilter();
       load({ quiet: true });
     } else if ((ev.type === 'roster' || ev.type === 'postings') && (!ev.from || !(ev.to < v.start || ev.from > to))) {
-      if (ev.type === 'postings' && !ev.from) postingTypes = null;
+      if (ev.type === 'postings' && !ev.from) {
+        postingTypes = null;
+        postStyleCache.clear();
+      }
       const sl = wrap.scrollLeft,
         st = wrap.scrollTop;
       load({ quiet: true }).then(() => {

@@ -107,7 +107,7 @@ export function seedDemo(today) {
   const yr = Number(today.slice(0, 4));
   db.holidays = Object.fromEntries([...ukBankHolidays(yr), ...ukBankHolidays(yr + 1)].map((h) => [h.date, h.name]));
   // Posting types and daily postings for the past week (and today for Team 2).
-  db.postingTypes = DEFAULT_POSTING_TYPES.map((t, i) => ({ id: nextId(), name: t.name, color: t.color, sortOrder: i, active: true }));
+  db.postingTypes = DEFAULT_POSTING_TYPES.map((t, i) => ({ id: nextId(), name: t.name, short: t.short, color: t.color, sortOrder: i, active: true }));
   db.postings = {};
   {
     const DETAIL = { Appointments: ['Witness statement', 'Victim update', 'Crime scene visit'], Enquiries: ['House-to-house', 'CCTV collection'], Paperwork: ['Court file', 'Overtime returns'] };

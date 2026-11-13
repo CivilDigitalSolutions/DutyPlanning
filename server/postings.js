@@ -3,6 +3,7 @@
 import { tx, audit } from './db.js';
 import { daysBetween, isValidIso } from './dates.js';
 import { canEditPostings, canViewPostings, normalisePosting } from './postings-rules.js';
+import { shortCode } from './posting-types.js';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -23,7 +24,10 @@ export function registerPostingRoutes(app, { db, staff, planner, json, wrap, Htt
     return db.prepare('SELECT id FROM teams').all().map((t) => t.id).filter((id) => canViewPostings(v, id));
   };
   const listTypes = () =>
-    db.prepare('SELECT id, name, color, sort_order AS sortOrder, active FROM posting_types ORDER BY active DESC, sort_order, name').all().map((t) => ({ ...t, active: !!t.active }));
+    db
+      .prepare('SELECT id, name, short, color, sort_order AS sortOrder, active FROM posting_types ORDER BY active DESC, sort_order, name')
+      .all()
+      .map((t) => ({ ...t, short: shortCode(t), active: !!t.active }));
 
   // ---- posting types ----
   app.get('/api/posting-types', staff, (req, res) => res.json({ types: listTypes() }));
@@ -33,7 +37,8 @@ export function registerPostingRoutes(app, { db, staff, planner, json, wrap, Htt
     const color = String(b.color || '#d0d7de');
     if (!HEX.test(color)) throw bad('Colour must be #rrggbb');
     const sortOrder = Number.isInteger(Number(b.sortOrder)) ? Number(b.sortOrder) : 0;
-    return [name, color, sortOrder, b.active === false ? 0 : 1];
+    const short = String(b.short ?? '').trim().toUpperCase().slice(0, 5) || null;
+    return [name, short, color, sortOrder, b.active === false ? 0 : 1];
   };
   const unique = (fn) => {
     try {
@@ -48,7 +53,7 @@ export function registerPostingRoutes(app, { db, staff, planner, json, wrap, Htt
     planner,
     json,
     wrap((req, res) => {
-      const id = unique(() => Number(db.prepare('INSERT INTO posting_types (name, color, sort_order, active) VALUES (?,?,?,?)').run(...typeBody(req.body)).lastInsertRowid));
+      const id = unique(() => Number(db.prepare('INSERT INTO posting_types (name, short, color, sort_order, active) VALUES (?,?,?,?,?)').run(...typeBody(req.body)).lastInsertRowid));
       audit(db, req.user, 'postingType.create', { id, name: req.body.name });
       broadcast({ type: 'postings' });
       res.json({ id });
@@ -59,7 +64,7 @@ export function registerPostingRoutes(app, { db, staff, planner, json, wrap, Htt
     planner,
     json,
     wrap((req, res) => {
-      const r = unique(() => db.prepare('UPDATE posting_types SET name=?, color=?, sort_order=?, active=? WHERE id=?').run(...typeBody(req.body), Number(req.params.id)));
+      const r = unique(() => db.prepare('UPDATE posting_types SET name=?, short=?, color=?, sort_order=?, active=? WHERE id=?').run(...typeBody(req.body), Number(req.params.id)));
       if (!r.changes) throw new HttpError(404, 'Posting type not found');
       audit(db, req.user, 'postingType.update', { id: Number(req.params.id), name: req.body.name });
       broadcast({ type: 'postings' });
@@ -103,14 +108,13 @@ export function registerPostingRoutes(app, { db, staff, planner, json, wrap, Htt
     res.json({ postings, editableTeams: editableTeams(req.user), visibleTeams: [...visible] });
   });
 
-  // PUT { date, changes: [{ personId, typeId, time, detail }] } - empty change clears the posting.
+  // PUT { date?, changes: [{ personId, date?, typeId, time, detail }] } - empty change clears the posting.
+  // Each change may carry its own date (the plan grid edits several days at once).
   app.put(
     '/api/postings',
     staff,
     json,
     wrap((req, res) => {
-      const date = req.body?.date;
-      if (!isValidIso(date)) throw bad('Choose a date');
       const changes = req.body?.changes;
       if (!Array.isArray(changes) || !changes.length) throw bad('Nothing to save');
       const v = viewerOf(req.user);
@@ -125,6 +129,8 @@ export function registerPostingRoutes(app, { db, staff, planner, json, wrap, Htt
         for (const ch of changes) {
           const { posting, error, empty } = normalisePosting(ch);
           if (error) throw bad(error);
+          const date = ch.date || req.body?.date;
+          if (!isValidIso(date)) throw bad('Choose a date');
           const person = teamOf.get(posting.personId);
           if (!person) throw bad('Unknown person');
           if (!canEditPostings(v, person.team_id)) throw new HttpError(403, "Only that team's team leader, supervisors or a planner can change its postings");
@@ -132,9 +138,11 @@ export function registerPostingRoutes(app, { db, staff, planner, json, wrap, Htt
           if (empty) del.run(posting.personId, date);
           else up.run(posting.personId, date, posting.typeId, posting.time, posting.detail, req.user.id);
         }
-        audit(db, req.user, 'postings.update', { date, count: changes.length });
+        const dates = changes.map((ch) => ch.date || req.body.date).sort();
+        audit(db, req.user, 'postings.update', { date: dates[0], to: dates.at(-1), count: changes.length });
       });
-      broadcast({ type: 'postings', from: date, to: date });
+      const dates = changes.map((ch) => ch.date || req.body.date).sort();
+      broadcast({ type: 'postings', from: dates[0], to: dates.at(-1) });
       res.json({ ok: true, count: changes.length });
     }),
   );
