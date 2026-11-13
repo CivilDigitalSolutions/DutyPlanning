@@ -151,7 +151,9 @@ export function createApp(db, config = {}) {
     if (!req.user) return res.status(401).json({ error: 'Not signed in' });
     const person = req.user.personId
       ? db
-          .prepare('SELECT id, staff_number AS staffNumber, name, initials, team_id AS teamId, line_manager_id AS lineManagerId FROM people WHERE id = ?')
+          .prepare(
+            'SELECT id, staff_number AS staffNumber, name, initials, team_id AS teamId, line_manager_id AS lineManagerId, job_title AS jobTitle, start_date AS startDate, mobile FROM people WHERE id = ?',
+          )
           .get(req.user.personId)
       : null;
     res.json({

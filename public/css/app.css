@@ -1777,3 +1777,209 @@ td.hol-date {
 .grid thead tr th.d.ph.td span {
   color: #fff;
 }
+
+/* ---------- Form 410: application for annual leave ---------- */
+.f410-req fieldset {
+  margin: 0 0 12px;
+  padding: 10px 12px 12px;
+}
+.f410-req legend {
+  font-weight: 700;
+  padding: 0 4px;
+}
+.f410-notice {
+  font-size: 13px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--primary);
+  background: var(--primary-soft);
+  border-radius: 6px;
+  margin: 0 0 12px;
+}
+.f410-decl {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.f410-decl label.check {
+  align-items: flex-start;
+}
+.f410-decl label.check input {
+  margin-top: 3px;
+}
+.f410-decl label.inline {
+  flex-wrap: wrap;
+}
+input.num {
+  width: 72px !important;
+  display: inline-block;
+}
+.f410-errors {
+  padding: 8px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+}
+.f410-errors ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+table.f410-weeks {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+table.f410-weeks th,
+table.f410-weeks td {
+  border: 1px solid var(--border-strong);
+  padding: 4px 6px;
+  text-align: center;
+  white-space: nowrap;
+}
+table.f410-weeks tbody th {
+  text-align: left;
+  font-weight: 600;
+}
+table.f410-weeks tr.nature td {
+  font-weight: 700;
+}
+dialog.f410-dialog {
+  width: min(96vw, 860px);
+}
+
+/* The completed form: a document look in both themes (always dark ink on white paper). */
+.f410 {
+  --ink: #111;
+  --rule: #222;
+  background: #fff;
+  color: var(--ink);
+  padding: 18px 20px;
+  border-radius: 6px;
+  font: 12.5px/1.4 Arial, Helvetica, sans-serif;
+  color-scheme: light;
+}
+.f410-top {
+  display: flex;
+  justify-content: space-between;
+}
+.f410-no {
+  font-weight: 700;
+  font-size: 14px;
+}
+.f410-title {
+  text-align: center;
+  font-size: 18px;
+  margin: 4px 0 10px;
+  color: var(--ink);
+}
+.f410 .f410-notice {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 12px;
+  color: var(--ink);
+}
+.f410-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 8px;
+}
+.f410-table th,
+.f410-table td {
+  border: 1px solid var(--rule);
+  padding: 5px 7px;
+  vertical-align: top;
+  text-align: left;
+  color: var(--ink);
+}
+.f410-table th {
+  font-weight: 700;
+  background: #f1f1f1;
+  white-space: nowrap;
+  width: 1%;
+}
+.f410 table.f410-weeks th,
+.f410 table.f410-weeks td {
+  border-color: var(--rule);
+  color: var(--ink);
+}
+.f410 table.f410-weeks thead th {
+  background: #f1f1f1;
+}
+.f410-period {
+  background: #fff;
+}
+.f410-small {
+  font-size: 11px;
+  margin: 2px 0 8px;
+}
+.f410-decl-table td.box {
+  width: 26px;
+  text-align: center;
+  font-weight: 800;
+  font-size: 14px;
+}
+.f410 .fill {
+  display: inline-block;
+  min-width: 28px;
+  border-bottom: 1px solid var(--rule);
+  text-align: center;
+}
+.f410-section {
+  font-weight: 700;
+  margin: 10px 0 4px;
+}
+.f410-guidance {
+  margin-top: 14px;
+  font-size: 11px;
+}
+.f410-guidance h2 {
+  font-size: 12px;
+  margin: 0 0 4px;
+  color: var(--ink);
+}
+.f410-guidance ol {
+  margin: 0;
+  padding-left: 18px;
+}
+.f410-ref {
+  margin-top: 8px;
+  font-size: 10px;
+  text-align: right;
+}
+#print-root {
+  display: none;
+}
+@media print {
+  body.printing > :not(#print-root) {
+    display: none !important;
+  }
+  body.printing #print-root {
+    display: block;
+  }
+  body.printing {
+    background: #fff;
+  }
+  #print-root .f410 {
+    padding: 0;
+    font-size: 11px;
+  }
+  #print-root .f410-table,
+  #print-root table.f410-weeks {
+    break-inside: avoid;
+  }
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+}
+
+.f410-decl input.num {
+  width: 80px !important;
+}
+.f410-req label.check {
+  align-items: flex-start;
+}
+.f410-req label.check input {
+  margin-top: 3px;
+  flex: none;
+}

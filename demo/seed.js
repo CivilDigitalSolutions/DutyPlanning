@@ -88,6 +88,11 @@ export function seedDemo(today) {
   ];
   const yr = Number(today.slice(0, 4));
   db.holidays = Object.fromEntries([...ukBankHolidays(yr), ...ukBankHolidays(yr + 1)].map((h) => [h.date, h.name]));
+  for (const p of db.people) {
+    p.jobTitle = p.sortOrder === 0 ? 'Sergeant' : 'Constable';
+    p.startDate = `${2008 + (p.id % 15)}-${String(1 + (p.id % 12)).padStart(2, '0')}-01`;
+  }
+  db.formSettings = { unit: 'Response Branch' };
   // Sample leave requests at each stage.
   db.leave = [];
   db.leaveEvents = [];
@@ -100,7 +105,24 @@ export function seedDemo(today) {
     const rid = nextId();
     const received = `${addDays(today, -receivedDaysAgo)} ${String(receivedHour).padStart(2, '0')}:${String((pid * 7) % 60).padStart(2, '0')}:00`;
     const decided = status === 'pending' ? null : `${addDays(today, -Math.max(0, receivedDaysAgo - 1))} 14:00:00`;
-    db.leave.push({ id: rid, personId: pid, type: 'AL', start, end, days, note, status, createdAt: received, decidedAt: decided, decidedBy: status === 'pending' ? null : 'Team leader', decisionNote: status === 'rejected' ? 'Team is already short that week' : null });
+    const person = db.people.find((p) => p.id === pid);
+    const manager = db.people.find((p) => p.id === person.lineManagerId);
+    const form = {
+      applicant: {
+        unit: 'Response Branch',
+        address: `${10 + (pid % 80)} Example Road, Sampletown`,
+        phone: person.mobile,
+        joinDate: person.startDate,
+        noCourtCases: pid % 4 !== 0,
+        crownCourtCases: pid % 4 === 0 ? 1 : null,
+        availableForCourt: false,
+        trainingCourses: 0,
+        signedBy: person.name,
+        signedAt: received.replace(' ', 'T') + 'Z',
+      },
+      ...(status === 'approved' ? { approval: { name: manager?.name || 'Admin', rank: manager?.jobTitle || '', at: decided.replace(' ', 'T') + 'Z', note: null } } : {}),
+    };
+    db.leave.push({ id: rid, personId: pid, type: 'AL', start, end, days, note, status, form, createdAt: received, decidedAt: decided, decidedBy: status === 'pending' ? null : 'Team leader', decisionNote: status === 'rejected' ? 'Team is already short that week' : null });
     db.leaveEvents.push({ id: nextId(), requestId: rid, at: received, username: db.people.find((p) => p.id === pid).name, action: 'requested', note });
     if (status !== 'pending') db.leaveEvents.push({ id: nextId(), requestId: rid, at: decided, username: 'Team leader', action: status === 'rejected' ? 'reject' : 'approve', note: null });
   };
