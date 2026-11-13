@@ -24,6 +24,7 @@ import { applyImport, exportWorkbook, parseGrid, readGrid } from './spreadsheet.
 import { parseUserRows, templateCsv, ROLES } from './user-import.js';
 import { applyUserImport, userTemplateWorkbook } from './users-io.js';
 import { registerLeaveRoutes } from './leave.js';
+import { registerPostingRoutes } from './postings.js';
 import { REGIONS, ukBankHolidays } from './holidays.js';
 import { buildIcs } from './ics.js';
 
@@ -964,6 +965,7 @@ export function createApp(db, config = {}) {
   );
 
   registerLeaveRoutes(app, { db, staff, planner, json, wrap, HttpError, broadcast, cfg });
+  registerPostingRoutes(app, { db, staff, planner, json, wrap, HttpError, broadcast });
 
   // ---------------- Public holidays ----------------
   app.get('/api/public-holidays', staff, (req, res) => {

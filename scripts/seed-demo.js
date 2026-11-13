@@ -136,6 +136,28 @@ tx(db, () => {
   leave('1015', 36, 3, 'approved', null, 8, 12);
   leave('1029', 37, 2, 'approved', 'Hospital appointment', 2, 8);
 
+  // Daily postings for the past week (and today for Team 2), so the Day view has examples
+  // and other teams can use "Copy from last working day".
+  db.exec('DELETE FROM postings');
+  {
+    const types = db.prepare('SELECT id, name FROM posting_types WHERE active = 1 ORDER BY sort_order').all();
+    const DETAIL = { Appointments: ['Witness statement', 'Victim update', 'Crime scene visit'], Enquiries: ['House-to-house', 'CCTV collection'], Paperwork: ['Court file', 'Overtime returns'] };
+    const insP = db.prepare('INSERT INTO postings (person_id, date, type_id, time, detail, updated_at) VALUES (?,?,?,?,?,datetime(\'now\'))');
+    const team2 = db.prepare("SELECT id FROM teams WHERE name = 'Team 2'").get().id;
+    for (let off = -6; off <= 0; off++) {
+      const d = addDays(today, off);
+      const working = db
+        .prepare("SELECT p.id, p.team_id FROM assignments a JOIN people p ON p.id = a.person_id JOIN duty_codes dc ON dc.code = a.code WHERE a.date = ? AND dc.category = 'duty' ORDER BY p.team_id, p.sort_order")
+        .all(d);
+      working.forEach((p, i) => {
+        if (off === 0 && p.team_id !== team2) return;
+        const t = types[(i + off + 7) % types.length];
+        const details = DETAIL[t.name];
+        insP.run(p.id, d, t.id, t.name === 'Appointments' ? `${9 + (i % 6)}:00`.padStart(5, '0') : null, details ? details[i % details.length] : null);
+      });
+    }
+  }
+
   const user = (username, password, role, personId = null) =>
     db
       .prepare(

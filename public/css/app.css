@@ -1841,3 +1841,112 @@ td.hol-date {
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 4px 12px;
 }
+
+/* ---------- Daily postings ---------- */
+.posting-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+.posting-line {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+.who-list li .nm {
+  min-width: 0;
+}
+.post-card h2 small {
+  margin-left: auto;
+}
+.post-tools,
+.post-save {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0 8px;
+}
+.post-tools select {
+  width: auto;
+}
+.post-save {
+  margin: 8px 0 0;
+}
+.post-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.post-row {
+  display: grid;
+  grid-template-columns: auto minmax(140px, 1fr) minmax(0, 2.4fr);
+  gap: 6px 10px;
+  align-items: center;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.post-row:not([data-pid]) {
+  grid-template-columns: minmax(140px, 1fr) minmax(0, 2fr);
+}
+.post-row.off {
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+}
+.post-who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.post-edit {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 132px minmax(120px, 1.6fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+.post-edit input,
+.post-edit select {
+  min-height: 32px;
+  padding: 4px 8px;
+}
+.post-what {
+  min-width: 0;
+}
+.dayview .day-body:has(.post-card) {
+  grid-template-columns: 1fr;
+}
+@media (max-width: 720px) {
+  .post-row,
+  .post-row:not([data-pid]) {
+    grid-template-columns: auto 1fr;
+  }
+  .post-row:not([data-pid]) .post-what,
+  .post-edit {
+    grid-column: 1 / -1;
+  }
+  .post-edit {
+    grid-template-columns: 1fr 132px auto;
+  }
+  .post-edit input[data-p='detail'] {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+/* Plan grid: a small corner marker on cells with a daily posting */
+.grid td.posted::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  border-style: solid;
+  border-width: 6px 0 0 6px;
+  border-color: transparent transparent transparent var(--primary);
+}

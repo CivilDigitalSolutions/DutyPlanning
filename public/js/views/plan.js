@@ -1,5 +1,5 @@
 // The planning grid: teams grouped down the side, dates across the top.
-import { put, post, download } from '../api.js';
+import { get, put, post, download } from '../api.js';
 import { state, isPlanner, loadRoster, codeInfo, onDuty, accStatus } from '../state.js';
 import { $, $$, esc, html, toast, dialog, addDays, eachDate, startOfWeek, todayIso, fmtDate, dayNum, isWeekend, contrast, debounce, store, daysBetween } from '../util.js';
 
@@ -36,6 +36,8 @@ export async function render(root) {
   let extendMode = false;
   let typed = '';
   let drawnGroups = [];
+  let postingAt = new Map(); // "personId|date" -> daily posting
+  let postingTypes = null;
   let rowOf = new Map();
   let colOf = new Map();
   let totalEls = [];
@@ -160,7 +162,10 @@ export async function render(root) {
     const to = addDays(v.start, v.span - 1);
     if (!quiet) table.innerHTML = '<tbody><tr><td class="loading">Loading…</td></tr></tbody>';
     try {
-      data = await loadRoster(from, to);
+      const [roster, pd, pt] = await Promise.all([loadRoster(from, to), get(`/postings?from=${from}&to=${to}`).catch(() => ({ postings: [] })), postingTypes ? null : get('/posting-types').catch(() => ({ types: [] }))]);
+      data = roster;
+      if (pt) postingTypes = new Map(pt.types.map((t) => [t.id, t]));
+      postingAt = new Map(pd.postings.map((x) => [`${x.personId}|${x.date}`, x]));
       dates = eachDate(from, to);
       $('.range-label', root).textContent = `${fmtDate(from, 'dm')} – ${fmtDate(to, 'dmy')}`;
       $('.date-jump', root).value = from;
@@ -248,7 +253,9 @@ export async function render(root) {
     if (a.c.length > 3) cls += ' long';
     if (a.c === '*') cls += ' masked';
     const info = codeInfo(a.c);
-    const title = `${info.label}${a.n ? ' - ' + a.n : ''}`;
+    const ps = postingAt.get(`${p.id}|${d}`);
+    if (ps) cls += ' posted';
+    const title = `${info.label}${a.n ? ' - ' + a.n : ''}${ps ? `\nPosting: ${[postingTypes?.get(ps.typeId)?.name, ps.time, ps.detail].filter(Boolean).join(' · ')}` : ''}`;
     return `<td class="${cls}" data-r="${r}" data-c="${c}" style="${cellStyle(a.c)}" title="${esc(title)}">${a.c === '*' ? '–' : esc(a.c)}</td>`;
   }
 
@@ -715,6 +722,7 @@ export async function render(root) {
         )}
         <h3>Team positions</h3><p class="muted"><span class="role role-leader">TL</span> team leader · <span class="role role-sup">SUP</span> supervisor ·
           a count with an amber underline means no team leader or supervisor is on duty that day.</p>
+        <h3>Daily postings</h3><p class="muted">A small blue corner on a cell means that person has a daily posting that day - hover to see it. Postings are set in the Day view.</p>
         <h3>Dates</h3><p class="muted"><span class="holiday-tag">Hol</span> public holiday · <span class="legend-lock"></span> leave lockdown (hover a date for its name)</p>
         <h3>Counts</h3><p class="muted">Numbers on team rows show how many people are on a duty (not rest, leave or training) each day. Red means below the team's minimum.</p>
       </div>`,
@@ -840,7 +848,8 @@ export async function render(root) {
       styleCache.clear();
       renderTeamFilter();
       load({ quiet: true });
-    } else if (ev.type === 'roster' && !(ev.to < v.start || ev.from > to)) {
+    } else if ((ev.type === 'roster' || ev.type === 'postings') && (!ev.from || !(ev.to < v.start || ev.from > to))) {
+      if (ev.type === 'postings' && !ev.from) postingTypes = null;
       const sl = wrap.scrollLeft,
         st = wrap.scrollTop;
       load({ quiet: true }).then(() => {

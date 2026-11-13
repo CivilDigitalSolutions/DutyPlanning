@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_DUTY_CODES } from './duty-codes.js';
+import { DEFAULT_POSTING_TYPES } from './posting-types.js';
 
 export { DEFAULT_DUTY_CODES };
 
@@ -121,6 +122,27 @@ CREATE TABLE IF NOT EXISTS leave_lockdowns (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS posting_types (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  color TEXT NOT NULL DEFAULT '#d0d7de',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1
+);
+
+-- Daily postings: what someone on duty is actually doing that day. Separate from the plan.
+CREATE TABLE IF NOT EXISTS postings (
+  person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  type_id INTEGER REFERENCES posting_types(id) ON DELETE SET NULL,
+  time TEXT,
+  detail TEXT,
+  updated_at TEXT,
+  updated_by INTEGER,
+  PRIMARY KEY (person_id, date)
+);
+CREATE INDEX IF NOT EXISTS postings_date ON postings(date);
+
 CREATE TABLE IF NOT EXISTS public_holidays (
   date TEXT PRIMARY KEY,
   name TEXT NOT NULL
@@ -152,6 +174,10 @@ export function openDb(file) {
     const order = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM duty_codes').get().m;
     const add = db.prepare('INSERT OR IGNORE INTO duty_codes (code, label, category, color, private, sort_order) VALUES (?,?,?,?,0,?)');
     DEFAULT_DUTY_CODES.filter((c) => c.code === 'RD-AL' || c.code === 'PH-AL').forEach((c, i) => add.run(c.code, c.label, c.category, c.color, order + i + 1));
+  }
+  if (db.prepare('SELECT COUNT(*) AS n FROM posting_types').get().n === 0) {
+    const ins = db.prepare('INSERT INTO posting_types (name, color, sort_order) VALUES (?,?,?)');
+    DEFAULT_POSTING_TYPES.forEach((t, i) => ins.run(t.name, t.color, i));
   }
   return db;
 }

@@ -11,8 +11,10 @@ import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leav
 import { dialog, html, todayIso, toast, addDays } from '../public/js/util.js';
 import { buildPlanWorkbook, buildUserTemplate } from '../server/workbooks.js';
 import { buildIcs } from '../server/ics.js';
+import { canEditPostings, normalisePosting } from '../server/postings-rules.js';
+import { DEFAULT_POSTING_TYPES } from '../server/posting-types.js';
 
-const KEY = 'dp-demo-v9';
+const KEY = 'dp-demo-v10';
 const RANK = { staff: 1, planner: 2, admin: 3 };
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -1039,6 +1041,131 @@ on('DELETE', '/lockdowns/:id', ({ params }) => {
   changed({ type: 'leave' });
   return { ok: true };
 });
+
+// ---------------- Daily postings (same behaviour as server/postings.js) ----------------
+db.postingTypes ??= DEFAULT_POSTING_TYPES.map((t, i) => ({ id: nextId(), name: t.name, color: t.color, sortOrder: i, active: true }));
+db.postings ??= {};
+const postingViewer = (u) => {
+  const p = db.people.find((x) => x.id === u.personId);
+  return { role: u.role, teamId: p?.teamId ?? null, teamRole: p?.teamRole ?? null };
+};
+const listPostingTypes = () => [...db.postingTypes].sort((a, b) => Number(b.active) - Number(a.active) || a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+const postingTypeBody = (b) => {
+  const name = s(b?.name, 60);
+  if (!name) bad('Give the posting type a name');
+  const color = s(b.color, 7) || '#d0d7de';
+  if (!HEX.test(color)) bad('Colour must be #rrggbb');
+  return { name, color, sortOrder: Number.isInteger(Number(b.sortOrder)) ? Number(b.sortOrder) : 0, active: b.active !== false };
+};
+on('GET', '/posting-types', () => {
+  need('staff');
+  return { types: listPostingTypes() };
+});
+on('POST', '/posting-types', ({ body }) => {
+  const u = need('planner');
+  const t = postingTypeBody(body);
+  if (db.postingTypes.some((x) => lc(x.name) === lc(t.name))) fail(409, 'A posting type with that name already exists');
+  const id = nextId();
+  db.postingTypes.push({ id, ...t });
+  audit(u, 'postingType.create', { id, name: t.name });
+  changed({ type: 'postings' });
+  return { id };
+});
+on('PUT', '/posting-types/:id', ({ body, params }) => {
+  const u = need('planner');
+  const t = db.postingTypes.find((x) => x.id === Number(params.id)) || fail(404, 'Posting type not found');
+  const v = postingTypeBody(body);
+  if (db.postingTypes.some((x) => x.id !== t.id && lc(x.name) === lc(v.name))) fail(409, 'A posting type with that name already exists');
+  Object.assign(t, v);
+  audit(u, 'postingType.update', { id: t.id, name: t.name });
+  changed({ type: 'postings' });
+  return { ok: true };
+});
+on('DELETE', '/posting-types/:id', ({ params }) => {
+  const u = need('planner');
+  const t = db.postingTypes.find((x) => x.id === Number(params.id)) || fail(404, 'Posting type not found');
+  const used = Object.values(db.postings).some((p) => p.typeId === t.id);
+  if (used) t.active = false;
+  else db.postingTypes = db.postingTypes.filter((x) => x !== t);
+  audit(u, used ? 'postingType.hide' : 'postingType.delete', { id: t.id });
+  changed({ type: 'postings' });
+  return { ok: true, hidden: used };
+});
+on('GET', '/postings', ({ query }) => {
+  const u = need('staff');
+  const from = query.date || query.from;
+  const to = query.date || query.to;
+  if (!isValidIso(from) || !isValidIso(to) || to < from) bad('Give a date, or from and to dates');
+  const person = query.person ? Number(query.person) : null;
+  const postings = Object.entries(db.postings)
+    .map(([k, v]) => {
+      const [pid, date] = k.split('|');
+      return { personId: Number(pid), date, ...v };
+    })
+    .filter((p) => p.date >= from && p.date <= to && (!person || p.personId === person))
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+  const v = postingViewer(u);
+  return { postings, editableTeams: db.teams.map((t) => t.id).filter((id) => canEditPostings(v, id)) };
+});
+on('PUT', '/postings', ({ body }) => {
+  const u = need('staff');
+  const date = body?.date;
+  if (!isValidIso(date)) bad('Choose a date');
+  const changes = body?.changes;
+  if (!Array.isArray(changes) || !changes.length) bad('Nothing to save');
+  const v = postingViewer(u);
+  const next = { ...db.postings };
+  for (const ch of changes) {
+    const { posting, error, empty } = normalisePosting(ch);
+    if (error) bad(error);
+    const person = db.people.find((p) => p.id === posting.personId) || bad('Unknown person');
+    if (!canEditPostings(v, person.teamId)) fail(403, "Only that team's team leader, supervisors or a planner can change its postings");
+    if (posting.typeId != null && !db.postingTypes.some((t) => t.id === posting.typeId)) bad('Unknown posting type');
+    const k = `${posting.personId}|${date}`;
+    if (empty) delete next[k];
+    else next[k] = { typeId: posting.typeId, time: posting.time, detail: posting.detail, updatedBy: personNameOrUser(u), updatedAt: new Date().toISOString() };
+  }
+  db.postings = next;
+  audit(u, 'postings.update', { date, count: changes.length });
+  changed({ type: 'postings', from: date, to: date });
+  return { ok: true, count: changes.length };
+});
+on('POST', '/postings/copy', ({ body }) => {
+  const u = need('staff');
+  const teamId = Number(body?.teamId);
+  const to = body?.to;
+  if (!isValidIso(to)) bad('Choose the day to copy to');
+  if (!canEditPostings(postingViewer(u), teamId)) fail(403, "Only that team's team leader, supervisors or a planner can change its postings");
+  const members = db.people.filter((p) => p.teamId === teamId);
+  const ids = new Set(members.map((p) => p.id));
+  const from =
+    body?.from && isValidIso(body.from)
+      ? body.from
+      : Object.keys(db.postings)
+          .map((k) => k.split('|'))
+          .filter(([pid, d]) => ids.has(Number(pid)) && d < to)
+          .map(([, d]) => d)
+          .sort()
+          .pop();
+  if (!from) bad('There are no earlier postings for this team to copy');
+  let copied = 0;
+  let skipped = 0;
+  for (const p of members) {
+    const src = db.postings[`${p.id}|${from}`];
+    if (!src) continue;
+    const onShift = findCode(db.asg[`${p.id}|${to}`]?.c || '')?.category === 'duty';
+    if (!onShift || (!body?.overwrite && db.postings[`${p.id}|${to}`])) {
+      skipped++;
+      continue;
+    }
+    db.postings[`${p.id}|${to}`] = { ...src, updatedBy: personNameOrUser(u), updatedAt: new Date().toISOString() };
+    copied++;
+  }
+  audit(u, 'postings.copy', { teamId, from, to, copied });
+  changed({ type: 'postings', from: to, to });
+  return { from, copied, skipped };
+});
+const personNameOrUser = (u) => db.people.find((p) => p.id === u.personId)?.name || u.username;
 
 // ---------------- Public holidays ----------------
 db.holidays ??= {};

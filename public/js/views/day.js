@@ -1,7 +1,8 @@
 // Day view: who is doing what on a given date, grouped by team and by duty.
 import { replaceRoute } from '../router.js';
 import { state, loadRoster, codeInfo, onDuty, accStatus } from '../state.js';
-import { $, html, addDays, todayIso, fmtDate, contrast } from '../util.js';
+import { get, put, post } from '../api.js';
+import { $, $$, html, addDays, todayIso, fmtDate, contrast, toast, confirmDialog, store } from '../util.js';
 
 const chip = (code) => {
   const info = codeInfo(code);
@@ -10,7 +11,11 @@ const chip = (code) => {
 
 export async function render(root, params) {
   let date = /^\d{4}-\d{2}-\d{2}$/.test(params[0] || '') ? params[0] : todayIso();
-  let mode = 'team';
+  let mode = store.get('dayMode', 'team');
+  let postings = new Map(); // personId -> { typeId, time, detail, updatedBy }
+  let editable = new Set(); // team ids this user may post
+  let types = [];
+  const dirty = new Set(); // team ids with unsaved posting changes
   let acc = '';
 
   root.innerHTML = html`
@@ -24,7 +29,7 @@ export async function render(root, params) {
         </div>
         <div class="group">
           <div class="seg" role="group" aria-label="Group by">
-            <button class="btn" data-mode="team">By team</button><button class="btn" data-mode="code">By duty</button>
+            <button class="btn" data-mode="team">By team</button><button class="btn" data-mode="code">By duty</button><button class="btn" data-mode="postings">Postings</button>
           </div>
           <select data-f="acc" aria-label="Filter by accreditation"><option value="">Any accreditation</option>${state.meta.accreditations.map((a) => html`<option value="${a.id}">${a.name}</option>`)}</select>
         </div>
@@ -41,7 +46,12 @@ export async function render(root, params) {
     $('.day-title', root).textContent = fmtDate(date, 'long');
     $('.day-body', root).innerHTML = '<p class="muted">Loading…</p>';
     try {
-      data = await loadRoster(date, date);
+      const [roster, pd, pt] = await Promise.all([loadRoster(date, date), get(`/postings?date=${date}`), get('/posting-types')]);
+      data = roster;
+      postings = new Map(pd.postings.map((x) => [x.personId, x]));
+      editable = new Set(pd.editableTeams);
+      types = pt.types;
+      dirty.clear();
       draw();
     } catch (e) {
       $('.day-body', root).innerHTML = html`<p class="error">${e.message}</p>`;
@@ -73,11 +83,16 @@ export async function render(root, params) {
     const RANK = { leader: 0, supervisor: 1 };
     const person = (p) => {
       const c = codeOf(p);
-      return html`<li class="${p.id === state.user.person?.id ? 'me' : ''}">${c ? chip(c) : html`<span class="chip empty">·</span>`}<span class="nm">${p.name}</span>${
+      const ps = postings.get(p.id);
+      return html`<li class="${p.id === state.user.person?.id ? 'me' : ''}">${c ? chip(c) : html`<span class="chip empty">·</span>`}<span class="nm">${p.name}${ps ? html`<small class="posting-line">${postingText(ps)}</small>` : ''}</span>${
         p.teamRole === 'leader' ? html`<span class="role role-leader" title="Team leader">TL</span>` : p.teamRole === 'supervisor' ? html`<span class="role role-sup" title="Supervisor">SUP</span>` : ''
       }<span class="muted">${p.initials || ''}</span>${p.mobile ? html`<a class="tel" href="tel:${p.mobile.replace(/[^+\d]/g, '')}" aria-label="Call ${p.name}">📞</a>` : ''}</li>`;
     };
     let out = '';
+    if (mode === 'postings') {
+      $('.day-body', root).innerHTML = postingsHtml(people, codeOf, RANK) || '<p class="empty">Nobody is on duty this day.</p>';
+      return;
+    }
     if (mode === 'team') {
       for (const t of data.teams) {
         const members = people.filter((p) => p.teamId === t.id);
@@ -116,26 +131,173 @@ export async function render(root, params) {
     const m = e.target.closest('[data-mode]')?.dataset.mode;
     if (m) {
       mode = m;
+      store.set('dayMode', m);
       return draw();
     }
-    if (act === 'prev') date = addDays(date, -1);
-    else if (act === 'next') date = addDays(date, 1);
-    else if (act === 'today') date = todayIso();
-    else return;
-    load();
+    const card = e.target.closest('[data-team]');
+    if (act === 'save' && card) return savePostings(Number(card.dataset.team));
+    if (act === 'copy' && card) return copyPostings(Number(card.dataset.team));
+    if (act === 'applySel' && card) return applyToSelected(card);
+    if (act === 'clearRow') {
+      const row = e.target.closest('[data-pid]');
+      row.querySelector('[data-p=type]').value = '';
+      row.querySelector('[data-p=time]').value = '';
+      row.querySelector('[data-p=detail]').value = '';
+      return markDirty(card);
+    }
+    if (!['prev', 'next', 'today'].includes(act)) return;
+    leaveDay(() => {
+      if (act === 'prev') date = addDays(date, -1);
+      else if (act === 'next') date = addDays(date, 1);
+      else date = todayIso();
+      load();
+    });
+  });
+  root.addEventListener('input', (e) => {
+    const card = e.target.closest('[data-team]');
+    if (card && e.target.dataset.p) markDirty(card);
   });
   root.addEventListener('change', (e) => {
+    if (e.target.dataset.p === 'type') return markDirty(e.target.closest('[data-team]'));
+    if (e.target.dataset.sel !== undefined) return;
     if (e.target.classList.contains('date-jump') && e.target.value) {
-      date = e.target.value;
-      load();
+      const to = e.target.value;
+      leaveDay(() => {
+        date = to;
+        load();
+      }, () => (e.target.value = date));
     } else if (e.target.dataset.f === 'acc') {
       acc = e.target.value;
       draw();
     }
   });
   const onChanged = (e) => {
-    if (e.detail.type === 'meta' || (e.detail.type === 'roster' && e.detail.from <= date && e.detail.to >= date)) load();
+    const d = e.detail;
+    if (dirty.size) return; // don't wipe someone's unsaved postings
+    if (d.type === 'meta' || ((d.type === 'roster' || d.type === 'postings') && (!d.from || (d.from <= date && d.to >= date)))) load();
   };
+
+  // ---------- Daily postings ----------
+  const typeById = (id) => types.find((t) => t.id === id);
+  function postingText(ps) {
+    const t = typeById(ps.typeId);
+    return html`${t ? html`<span class="posting-tag" style="background:${t.color};color:${contrast(t.color)}">${t.name}</span>` : ''}${ps.time ? html` <b>${ps.time}</b>` : ''}${
+      ps.detail ? html` ${ps.detail}` : ''
+    }`;
+  }
+
+  function postingsHtml(people, codeOf, RANK) {
+    const byRole = (a, b) => (RANK[a.teamRole] ?? 2) - (RANK[b.teamRole] ?? 2);
+    const badge = (p) =>
+      p.teamRole === 'leader' ? html`<span class="role role-leader" title="Team leader">TL</span>` : p.teamRole === 'supervisor' ? html`<span class="role role-sup" title="Supervisor">SUP</span>` : '';
+    let out = '';
+    for (const t of data.teams) {
+      const members = people.filter((p) => p.teamId === t.id);
+      const working = members.filter((p) => onDuty(codeOf(p))).sort(byRole);
+      // People with a posting who aren't on duty (e.g. put on leave since): shown so it can be cleared.
+      const stray = members.filter((p) => !onDuty(codeOf(p)) && postings.has(p.id));
+      if (!working.length && !stray.length) continue;
+      const canEdit = editable.has(t.id);
+      const posted = working.filter((p) => postings.has(p.id)).length;
+      const activeTypes = types.filter((x) => x.active);
+      const row = (p, off) => {
+        const ps = postings.get(p.id) || {};
+        const c = codeOf(p);
+        if (!canEdit)
+          return html`<li class="post-row ${off ? 'off' : ''}"><span class="post-who">${c ? chip(c) : ''}<span class="nm">${p.name}</span>${badge(p)}</span>
+            <span class="post-what">${postings.has(p.id) ? postingText(ps) : html`<span class="muted">Not posted</span>`}${off ? html` <span class="warn-text small">not on duty</span>` : ''}</span></li>`;
+        return html`<li class="post-row ${off ? 'off' : ''}" data-pid="${p.id}">
+          <label class="pick"><input type="checkbox" data-sel aria-label="Select ${p.name}" /></label>
+          <span class="post-who">${c ? chip(c) : ''}<span class="nm">${p.name}</span>${badge(p)}${off ? html`<span class="warn-text small">not on duty</span>` : ''}</span>
+          <span class="post-edit">
+            <select data-p="type" aria-label="Posting for ${p.name}"><option value="">No posting</option>${[...activeTypes, ...types.filter((x) => !x.active && x.id === ps.typeId)].map(
+              (x) => html`<option value="${x.id}" ${x.id === ps.typeId ? 'selected' : ''}>${x.name}</option>`,
+            )}</select>
+            <input type="time" data-p="time" value="${ps.time || ''}" aria-label="Time" />
+            <input data-p="detail" value="${ps.detail || ''}" maxlength="200" placeholder="Detail (optional)" aria-label="Detail for ${p.name}" />
+            <button type="button" class="btn btn-sm btn-ghost" data-act="clearRow" title="Clear this posting">✕</button>
+          </span>
+        </li>`;
+      };
+      out += html`<div class="card group-card post-card" data-team="${t.id}">
+        <h2>${t.name} <small class="muted">${posted} of ${working.length} on duty posted</small></h2>
+        ${canEdit
+          ? html`<div class="post-tools">
+              <button type="button" class="btn btn-sm" data-act="copy" title="Copy this team's postings from its last working day, for people on duty today">Copy from last working day</button>
+              <span class="spacer"></span>
+              <select data-bulk aria-label="Posting for selected people"><option value="">Give selected…</option>${activeTypes.map((x) => html`<option value="${x.id}">${x.name}</option>`)}</select>
+              <button type="button" class="btn btn-sm" data-act="applySel">Apply</button>
+            </div>`
+          : ''}
+        <ul class="post-list">${working.map((p) => row(p, false))}${stray.map((p) => row(p, true))}</ul>
+        ${canEdit ? html`<div class="post-save"><span class="muted small" data-dirty hidden>Unsaved changes</span><span class="spacer"></span><button type="button" class="btn btn-primary btn-sm" data-act="save" disabled>Save postings</button></div>` : ''}
+      </div>`;
+    }
+    return out;
+  }
+
+  function markDirty(card) {
+    if (!card) return;
+    dirty.add(Number(card.dataset.team));
+    $('[data-act=save]', card).disabled = false;
+    $('[data-dirty]', card).hidden = false;
+  }
+
+  function applyToSelected(card) {
+    const typeId = $('[data-bulk]', card).value;
+    const rows = $$('[data-pid]', card).filter((r) => r.querySelector('[data-sel]').checked);
+    if (!typeId || !rows.length) return toast('Tick some people and choose a posting first', 'warn');
+    for (const r of rows) {
+      r.querySelector('[data-p=type]').value = typeId;
+      r.querySelector('[data-sel]').checked = false;
+    }
+    markDirty(card);
+  }
+
+  async function savePostings(teamId) {
+    const card = $(`[data-team="${teamId}"]`, root);
+    const changes = $$('[data-pid]', card)
+      .map((r) => ({
+        personId: Number(r.dataset.pid),
+        typeId: r.querySelector('[data-p=type]').value || null,
+        time: r.querySelector('[data-p=time]').value,
+        detail: r.querySelector('[data-p=detail]').value,
+      }))
+      .filter((ch) => {
+        const old = postings.get(ch.personId) || {};
+        return String(old.typeId ?? '') !== String(ch.typeId ?? '') || (old.time || '') !== ch.time || (old.detail || '') !== ch.detail.trim();
+      });
+    if (!changes.length) {
+      dirty.delete(teamId);
+      return draw();
+    }
+    try {
+      await put('/postings', { date, changes });
+      toast(`Postings saved (${changes.length})`, 'success');
+      dirty.delete(teamId);
+      await load();
+    } catch (ex) {
+      toast(ex.message, 'error');
+    }
+  }
+
+  async function copyPostings(teamId) {
+    if (dirty.has(teamId) && !(await confirmDialog('Discard your unsaved changes for this team and copy from its last working day?', 'Copy'))) return;
+    try {
+      const r = await post('/postings/copy', { teamId, to: date });
+      toast(`Copied ${r.copied} posting${r.copied === 1 ? '' : 's'} from ${fmtDate(r.from, 'dm')}${r.skipped ? ` · ${r.skipped} skipped (not on duty or already posted)` : ''}`, 'success', 6000);
+      dirty.delete(teamId);
+      await load();
+    } catch (ex) {
+      toast(ex.message, 'error');
+    }
+  }
+
+  /** Ask before leaving a day with unsaved postings. */
+  async function leaveDay(go, stay) {
+    if (dirty.size && !(await confirmDialog('You have unsaved postings for this day. Leave without saving?', 'Leave without saving', true))) return stay?.();
+    go();
+  }
   window.addEventListener('dp:changed', onChanged);
   await load();
   return () => window.removeEventListener('dp:changed', onChanged);

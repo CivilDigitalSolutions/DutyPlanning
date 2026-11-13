@@ -7,6 +7,7 @@ const TABS = [
   ['people', 'People'],
   ['teams', 'Teams'],
   ['codes', 'Duty codes'],
+  ['postingtypes', 'Posting types'],
   ['accreditations', 'Accreditations'],
   ['holidays', 'Public holidays'],
   ['lockdowns', 'Leave lockdowns'],
@@ -25,7 +26,7 @@ export async function render(root, params) {
       <div class="admin-body"></div>
     </section>`;
   const body = $('.admin-body', root);
-  const handlers = { people, teams, codes, accreditations, holidays, lockdowns, import: importExport, users, audit };
+  const handlers = { people, teams, codes, accreditations, holidays, lockdowns, import: importExport, users, audit, postingtypes };
   await handlers[tab](body, params.slice(1));
 }
 
@@ -275,6 +276,45 @@ async function teams(body) {
       }
     },
     remove: (t) => del(`/teams/${t.id}`),
+  });
+}
+
+async function postingtypes(body) {
+  let list = (await get('/posting-types')).types;
+  const chip = (t) => html`<span class="posting-tag" style="background:${t.color};color:${contrast(t.color)}">${t.name}</span>`;
+  const reload = async () => {
+    list = (await get('/posting-types')).types;
+  };
+  await simpleCrud(body, {
+    title: 'Posting types',
+    addLabel: 'Add posting type',
+    rows: () => list,
+    keyOf: (t) => t.id,
+    columns: [
+      ['Posting', chip],
+      ['Order', (t) => t.sortOrder],
+      ['In use', (t) => (t.active ? 'Yes' : html`<span class="muted">Hidden</span>`)],
+    ],
+    fields: (t) => html`<div class="form-grid">
+      <label class="span2">Name<input name="name" value="${t?.name || ''}" required maxlength="60" placeholder="e.g. Appointments" /></label>
+      <label>Colour<input name="color" type="color" value="${t?.color || '#8ecae6'}" /></label>
+      <label>Display order<input name="sortOrder" type="number" value="${t?.sortOrder ?? list.length}" /></label>
+      ${t ? html`<label class="check span2"><input type="checkbox" name="active" ${t.active ? 'checked' : ''} /> Offer this posting type</label>` : ''}
+      <p class="span2 muted">Team leaders and supervisors choose these when setting their team's daily postings in the Day view, and can add free-text detail and a time.</p>
+    </div>`,
+    create: async (v) => {
+      await post('/posting-types', v);
+      await reload();
+    },
+    update: async (t, v, form) => {
+      await put(`/posting-types/${t.id}`, { ...v, active: form.active.checked });
+      await reload();
+    },
+    remove: async (t) => {
+      const r = await del(`/posting-types/${t.id}`);
+      if (r.hidden) toast('This type has been used, so it has been hidden rather than deleted', 'info', 6000);
+      await reload();
+    },
   });
 }
 
@@ -764,6 +804,9 @@ async function audit(body) {
     if (!d) return '';
     if (e.action === 'assignments.update') return `${d.count} cell(s) ${d.from}${d.to !== d.from ? ` to ${d.to}` : ''}`;
     if (e.action === 'assignments.pattern') return `${d.personIds.length} people, ${d.from} to ${d.to}: ${d.pattern.map((x) => x || '-').join(' ')}`;
+    if (e.action === 'postings.update') return `${d.count} posting(s) on ${d.date}`;
+    if (e.action === 'postings.copy') return `Team #${d.teamId}: copied ${d.copied} from ${d.from} to ${d.to}`;
+    if (e.action.startsWith('postingType.')) return d.name || `Type #${d.id}`;
     if (e.action === 'team.roles') return `Team #${d.id}: leader and supervisors updated`;
     if (e.action.startsWith('lockdown.')) return d.name ? `${d.name}: ${d.start} to ${d.end}` : `Lockdown #${d.id}`;
     if (e.action.startsWith('holiday.')) return d.year ? `${d.year} ${d.region}: ${d.added} added` : `${d.date}${d.name ? ' ' + d.name : ''}`;

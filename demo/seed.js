@@ -1,6 +1,7 @@
 // Sample data for the standalone demo build (mirrors scripts/seed-demo.js).
 import { addDays, eachDate } from '../server/dates.js';
 import { DEFAULT_DUTY_CODES } from '../server/duty-codes.js';
+import { DEFAULT_POSTING_TYPES } from '../server/posting-types.js';
 import { ukBankHolidays } from '../server/holidays.js';
 
 const FIRST = ['Alex', 'Sam', 'Jordan', 'Chris', 'Taylor', 'Morgan', 'Jamie', 'Robin', 'Casey', 'Drew', 'Avery', 'Riley', 'Quinn', 'Charlie', 'Frankie', 'Harper', 'Jesse', 'Kai', 'Lee', 'Max'];
@@ -101,6 +102,26 @@ export function seedDemo(today) {
   ];
   const yr = Number(today.slice(0, 4));
   db.holidays = Object.fromEntries([...ukBankHolidays(yr), ...ukBankHolidays(yr + 1)].map((h) => [h.date, h.name]));
+  // Posting types and daily postings for the past week (and today for Team 2).
+  db.postingTypes = DEFAULT_POSTING_TYPES.map((t, i) => ({ id: nextId(), name: t.name, color: t.color, sortOrder: i, active: true }));
+  db.postings = {};
+  {
+    const DETAIL = { Appointments: ['Witness statement', 'Victim update', 'Crime scene visit'], Enquiries: ['House-to-house', 'CCTV collection'], Paperwork: ['Court file', 'Overtime returns'] };
+    const duty = new Set(db.codes.filter((c) => c.category === 'duty').map((c) => c.code));
+    const team2 = db.teams.find((t) => t.name === 'Team 2').id;
+    const ordered = [...db.people].sort((a, b) => a.teamId - b.teamId || a.sortOrder - b.sortOrder);
+    for (let off = -6; off <= 0; off++) {
+      const d = addDays(today, off);
+      ordered
+        .filter((p) => duty.has(db.asg[`${p.id}|${d}`]?.c))
+        .forEach((p, i) => {
+          if (off === 0 && p.teamId !== team2) return;
+          const t = db.postingTypes[(i + off + 7) % db.postingTypes.length];
+          const details = DETAIL[t.name];
+          db.postings[`${p.id}|${d}`] = { typeId: t.id, time: t.name === 'Appointments' ? `${String(9 + (i % 6)).padStart(2, '0')}:00` : null, detail: details ? details[i % details.length] : null, updatedBy: 'Team leader' };
+        });
+    }
+  }
   // Sample leave requests at each stage.
   db.leave = [];
   db.leaveEvents = [];

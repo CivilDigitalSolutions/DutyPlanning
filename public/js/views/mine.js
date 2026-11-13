@@ -1,5 +1,5 @@
 // "My duties" - a phone friendly personal view.
-import { download } from '../api.js';
+import { download, get } from '../api.js';
 import { state, loadRoster, codeInfo, onDuty } from '../state.js';
 import { $, html, addDays, eachDate, startOfWeek, todayIso, fmtDate, dayNum, contrast } from '../util.js';
 
@@ -9,6 +9,13 @@ const chip = (code) => {
 };
 
 export async function render(root) {
+  const postingLine = (ps) => {
+    if (!ps) return '';
+    const t = postingTypes.get(ps.typeId);
+    return html`<small class="posting-line">Posting: ${t ? html`<span class="posting-tag" style="background:${t.color};color:${contrast(t.color)}">${t.name}</span>` : ''}${
+      ps.time ? html` <b>${ps.time}</b>` : ''
+    }${ps.detail ? html` ${ps.detail}` : ''}</small>`;
+  };
   const me = state.user.person;
   if (!me) {
     root.innerHTML = '<div class="empty">Your account is not linked to anyone on the plan. Ask a planner to link it.</div>';
@@ -19,6 +26,8 @@ export async function render(root) {
   let end = addDays(start, 83);
   let cells = new Map();
   let hols = {};
+  let myPostings = new Map(); // date -> posting
+  let postingTypes = new Map();
   const dayCache = new Map();
 
   root.innerHTML = html`
@@ -36,7 +45,13 @@ export async function render(root) {
     </section>`;
 
   async function load() {
-    const data = await loadRoster(start, end, { person: me.id });
+    const [data, pd, pt] = await Promise.all([
+      loadRoster(start, end, { person: me.id }),
+      get(`/postings?from=${start}&to=${end}&person=${me.id}`).catch(() => ({ postings: [] })),
+      get('/posting-types').catch(() => ({ types: [] })),
+    ]);
+    myPostings = new Map(pd.postings.map((x) => [x.date, x]));
+    postingTypes = new Map(pt.types.map((t) => [t.id, t]));
     hols = data.publicHolidays || {};
     cells = new Map([...data.cells].filter(([k]) => k.startsWith(me.id + '|')).map(([k, v]) => [k.split('|')[1], v]));
     draw();
@@ -68,7 +83,7 @@ export async function render(root) {
           <button class="day-btn" data-day="${d}" aria-expanded="false">
             <span class="dow">${fmtDate(d, 'dow')}</span><span class="dnum">${dayNum(d)}</span>
             ${a ? chip(a.c) : html`<span class="chip empty">·</span>`}
-            <span class="lbl">${info ? info.label : 'Nothing planned'}${hols[d] ? html` <span class="holiday-tag">${hols[d]}</span>` : ''}${a?.n ? html`<small>${a.n}</small>` : ''}</span>
+            <span class="lbl">${info ? info.label : 'Nothing planned'}${hols[d] ? html` <span class="holiday-tag">${hols[d]}</span>` : ''}${a?.n ? html`<small>${a.n}</small>` : ''}${postingLine(myPostings.get(d))}</span>
             <span class="chev" aria-hidden="true">›</span>
           </button>
           <div class="who" hidden></div>
@@ -116,7 +131,7 @@ export async function render(root) {
   });
 
   const onChanged = (e) => {
-    if (e.detail.type === 'roster' || e.detail.type === 'meta') {
+    if (e.detail.type === 'roster' || e.detail.type === 'meta' || e.detail.type === 'postings') {
       dayCache.clear();
       load();
     }
