@@ -1,6 +1,5 @@
 // Annual leave requests: request -> line manager approval -> leave administrator applies to roster.
 import { tx, audit } from './db.js';
-import { DEFAULT_FORM_SETTINGS, SETTING_KEYS, normaliseApplicantForm } from '../public/js/shared/leave-form.js';
 import { daysBetween, eachDate, isValidIso } from './dates.js';
 import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leaveBreakdown, validateRequestDates, lockdownsFor, canRosterLockdown } from './leave-rules.js';
 
@@ -74,36 +73,6 @@ export function registerLeaveRoutes(app, { db, staff, planner, json, wrap, HttpE
          WHERE person_id = ? AND id <> ? AND status IN (${ACTIVE_STATUSES.map(() => '?').join(',')}) AND start_date <= ? AND end_date >= ?`,
       )
       .all(personId, exceptId, ...ACTIVE_STATUSES, end, start);
-
-  const nowIso = () => new Date().toISOString();
-  const personName = (u) => (u.personId && db.prepare('SELECT name FROM people WHERE id = ?').get(u.personId)?.name) || u.username;
-  const personRank = (u) => (u.personId && db.prepare('SELECT job_title FROM people WHERE id = ?').get(u.personId)?.job_title) || '';
-  function updateForm(id, fn) {
-    const cur = JSON.parse(db.prepare('SELECT form FROM leave_requests WHERE id = ?').get(id).form || '{}');
-    db.prepare('UPDATE leave_requests SET form = ? WHERE id = ?').run(JSON.stringify(fn(cur)), id);
-  }
-  const formSettings = () => {
-    const out = { ...DEFAULT_FORM_SETTINGS };
-    for (const r of db.prepare("SELECT key, value FROM settings WHERE key LIKE 'leaveForm.%'").all()) out[r.key.slice(10)] = r.value;
-    return out;
-  };
-
-  // Wording of the leave application form (form number, unit, notices, guidance notes).
-  app.get('/api/settings/leave-form', staff, (req, res) => res.json({ settings: formSettings() }));
-  app.put(
-    '/api/settings/leave-form',
-    staff,
-    json,
-    wrap((req, res) => {
-      if (req.user.role !== 'admin') throw new HttpError(403, 'Only admins can change the leave form');
-      const set = db.prepare('INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
-      tx(db, () => {
-        for (const k of SETTING_KEYS) if (k in (req.body || {})) set.run(`leaveForm.${k}`, s(req.body[k], k === 'guidance' ? 5000 : 500));
-        audit(db, req.user, 'settings.leaveForm', null);
-      });
-      res.json({ settings: formSettings() });
-    }),
-  );
 
   function event(id, user, action, note) {
     db.prepare('INSERT INTO leave_events (request_id, user_id, username, action, note) VALUES (?,?,?,?,?)').run(id, user.id, user.username, action, note || null);
@@ -196,18 +165,11 @@ export function registerLeaveRoutes(app, { db, staff, planner, json, wrap, HttpE
       const clash = overlapping(personId, b.start, b.end);
       if (clash.length) throw new HttpError(409, `This overlaps another request (${clash[0].start} to ${clash[0].end})`);
       const { workingDays } = breakdownFor(personId, b.start, b.end);
-      // The application form (Form 410): checked here, and signed electronically by whoever submits it.
-      let form = null;
-      if (b.form) {
-        const { form: applicant, errors } = normaliseApplicantForm(b.form, { workingDays });
-        if (errors.length) throw bad(errors.join('. '));
-        form = { applicant: { ...applicant, signedBy: personName(u), signedAt: nowIso() } };
-      }
       const id = tx(db, () => {
         const id = Number(
           db
-            .prepare('INSERT INTO leave_requests (person_id, type_code, start_date, end_date, days, note, created_by, form) VALUES (?,?,?,?,?,?,?,?)')
-            .run(personId, type.code, b.start, b.end, workingDays, s(b.note, 500) || null, u.id, form && JSON.stringify(form)).lastInsertRowid,
+            .prepare('INSERT INTO leave_requests (person_id, type_code, start_date, end_date, days, note, created_by) VALUES (?,?,?,?,?,?,?)')
+            .run(personId, type.code, b.start, b.end, workingDays, s(b.note, 500) || null, u.id).lastInsertRowid,
         );
         event(id, u, 'requested', s(b.note, 500));
         audit(db, u, 'leave.request', { id, personId, start: b.start, end: b.end, days: workingDays });
@@ -230,14 +192,7 @@ export function registerLeaveRoutes(app, { db, staff, planner, json, wrap, HttpE
          LEFT JOIN users u ON u.id = e.user_id LEFT JOIN people p ON p.id = u.person_id WHERE e.request_id = ? ORDER BY e.id`,
       )
       .all(r.id);
-    const person = db
-      .prepare(
-        `SELECT p.name, p.staff_number AS staffNumber, p.job_title AS jobTitle, p.start_date AS startDate, p.mobile, t.name AS teamName
-         FROM people p LEFT JOIN teams t ON t.id = p.team_id WHERE p.id = ?`,
-      )
-      .get(r.personId);
-    const form = JSON.parse(db.prepare('SELECT form FROM leave_requests WHERE id = ?').get(r.id).form || 'null');
-    res.json({ request: withActions(u)(r), ...breakdownFor(r.personId, r.start, r.end), events, form, person });
+    res.json({ request: withActions(u)(r), ...breakdownFor(r.personId, r.start, r.end), events });
   });
 
   app.post(
@@ -263,8 +218,6 @@ export function registerLeaveRoutes(app, { db, staff, planner, json, wrap, HttpE
       tx(db, () => {
         if (action === 'approve' || action === 'reject' || action === 'decline') {
           db.prepare("UPDATE leave_requests SET status = ?, decided_by = ?, decided_at = datetime('now'), decision_note = ? WHERE id = ?").run(next, u.id, note, r.id);
-          if (action === 'approve')
-            updateForm(r.id, (f) => ({ ...f, approval: { name: personName(u), rank: personRank(u), at: nowIso(), note } }));
         } else if (action === 'apply') {
           const code = db.prepare("SELECT code FROM duty_codes WHERE code = ? AND category = 'leave'").get(String(req.body?.code || r.type))?.code;
           if (!code) throw bad('Choose a leave code to put on the roster');
@@ -288,12 +241,6 @@ export function registerLeaveRoutes(app, { db, staff, planner, json, wrap, HttpE
             r.id,
           );
           rosterChanged = plan.length > 0;
-          // Admin Unit section of the form.
-          const dayCount = (v) => (v == null || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null);
-          updateForm(r.id, (f) => ({
-            ...f,
-            admin: { notedBy: personName(u), enteredBy: personName(u), at: nowIso(), leaveOutstanding: dayCount(req.body?.leaveOutstanding), restDaysOutstanding: dayCount(req.body?.restDaysOutstanding) },
-          }));
         } else if (action === 'remove') {
           const row = db.prepare('SELECT applied_code, applied_snapshot FROM leave_requests WHERE id = ?').get(r.id);
           const snapshot = JSON.parse(row.applied_snapshot || '[]');

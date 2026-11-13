@@ -12,7 +12,6 @@ const TABS = [
   ['lockdowns', 'Leave lockdowns'],
   ['import', 'Import / export'],
   ['users', 'User accounts', true],
-  ['leaveform', 'Leave form', true],
   ['audit', 'Activity log', true],
 ];
 
@@ -26,7 +25,7 @@ export async function render(root, params) {
       <div class="admin-body"></div>
     </section>`;
   const body = $('.admin-body', root);
-  const handlers = { people, teams, codes, accreditations, holidays, lockdowns, import: importExport, users, leaveform, audit };
+  const handlers = { people, teams, codes, accreditations, holidays, lockdowns, import: importExport, users, audit };
   await handlers[tab](body, params.slice(1));
 }
 
@@ -298,33 +297,6 @@ function accreditations(body) {
     create: (v) => post('/accreditations', v),
     update: (a, v) => put(`/accreditations/${a.id}`, v),
     remove: (a) => del(`/accreditations/${a.id}`),
-  });
-}
-
-// ---------------- Leave application form wording ----------------
-async function leaveform(body) {
-  const { settings } = await get('/settings/leave-form');
-  body.innerHTML = html`
-    <div class="toolbar"><h2>Leave application form</h2></div>
-    <p class="muted">People complete this form when they request leave. It's signed electronically, completed by the line manager when they approve,
-      and by the leave administrator when they add the leave to the roster. Anyone can view or print it from the request.</p>
-    <form class="card form-grid" data-form="lf">
-      <label>Form number<input name="number" value="${settings.number}" maxlength="100" /></label>
-      <label>Title<input name="title" value="${settings.title}" maxlength="200" /></label>
-      <label>Default OCU/Branch<input name="unit" value="${settings.unit}" maxlength="100" placeholder="Filled in on each form" /></label>
-      <label>Reference (printed at the bottom)<input name="reference" value="${settings.reference}" maxlength="100" placeholder="e.g. MP 321/12" /></label>
-      <label class="span2">Notice at the top of the form<textarea name="notice" rows="2" maxlength="500">${settings.notice}</textarea></label>
-      <label class="span2">Notes for guidance (one note per line)<textarea name="guidance" rows="8" maxlength="5000">${settings.guidance}</textarea></label>
-      <div class="span2"><button class="btn btn-primary">Save</button></div>
-    </form>`;
-  $('[data-form=lf]', body).addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try {
-      await put('/settings/leave-form', formData(e.target));
-      toast('Saved', 'success');
-    } catch (ex) {
-      toast(ex.message, 'error');
-    }
   });
 }
 
@@ -763,7 +735,6 @@ async function audit(body) {
     if (!d) return '';
     if (e.action === 'assignments.update') return `${d.count} cell(s) ${d.from}${d.to !== d.from ? ` to ${d.to}` : ''}`;
     if (e.action === 'assignments.pattern') return `${d.personIds.length} people, ${d.from} to ${d.to}: ${d.pattern.map((x) => x || '-').join(' ')}`;
-    if (e.action === 'settings.leaveForm') return 'Leave form wording changed';
     if (e.action.startsWith('lockdown.')) return d.name ? `${d.name}: ${d.start} to ${d.end}` : `Lockdown #${d.id}`;
     if (e.action.startsWith('holiday.')) return d.year ? `${d.year} ${d.region}: ${d.added} added` : `${d.date}${d.name ? ' ' + d.name : ''}`;
     if (e.action.startsWith('leave.')) return `Request #${d.id}: ${d.start} to ${d.end}`;

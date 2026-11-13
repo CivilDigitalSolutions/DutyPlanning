@@ -46,20 +46,6 @@ Staff No | Name | Initials | Mobile | [Team] | <accreditation columns…> | 01/1
 | 3. Add to roster | A **leave administrator** (Leave → To add to roster) | Chooses the leave code (default AL) and checks a preview of every day, then adds it. Working days become **AL**, rest days become **Rest Day - AL** (`RD-AL`), and public holidays become **Public holiday - AL** (`PH-AL`). Existing leave such as sickness is left alone. The duties it replaced are remembered. |
 | Cancel | The person | They can cancel while it's pending or approved. Once it's on the roster they **ask to cancel**, and a leave administrator removes it (their original duties are restored) or keeps it. |
 
-**Leave application form (Form 410).** Requesting leave means completing an on-screen version of *Form 410 – Application for Annual Leave*:
-
-| Form section | In the app |
-| --- | --- |
-| OCU/Branch, Date, Name, Rank/Band, Warrant/Pay No., Leave party | Filled in from the person's record (branch default is a setting and can be changed on the form) |
-| Period and the Sat–Fri week grid | From the dates and the roster: working days **A/L**, rest days **R/D**, bank holidays **B.H.L.** |
-| Address while on leave, Telephone, Date of joining | Entered on the form (telephone and joining date pre-filled) |
-| Declarations (a)–(d) | (a) and (b) are mutually exclusive and one is required. (c) is only available for leave of 3 working days or less. (d) is pre-filled with the number of training courses on the roster in that period. |
-| Applicant signature | Electronic: the person confirms the declaration; their name and the date/time are recorded |
-| Authorisation by supervising officer | Recorded when the line manager approves: name, rank, date/time ("Digitally approved") |
-| Admin Unit section | Recorded when a leave administrator adds the leave to the roster. "Annual leave outstanding" and "outstanding rest days" are optional numbers they can enter (the app doesn't track allowances) |
-
-Every request has **View form**, which shows the completed form laid out like the paper version, with **Print or save as PDF** (A4). Admins set the form number, title, default branch, notice, reference and guidance notes under **Manage → Leave form**.
-
 **Leave lockdowns** (Manage → Leave lockdowns) are periods when leave needs extra control, such as a major operation. They can cover all teams or one team. During a lockdown, line managers can still approve leave, but **only someone who supervises the planners** (an account with the **Planner supervisor** tick box) can add it to the roster. Planners, admins and leave administrators can't; they see "needs a planner supervisor" instead of the button. Lockdowns are shown on the request form, on each request and its day-by-day breakdown, and as a red edge on the plan's date headers.
 
 **Work queues and filters.** The *To approve*, *To add to roster* and *All requests* tabs share a filter bar, so a busy period can be worked through as a queue:

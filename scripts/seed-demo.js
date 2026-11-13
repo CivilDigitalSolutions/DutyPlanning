@@ -79,13 +79,6 @@ tx(db, () => {
     for (const m of members.slice(1)) db.prepare('UPDATE people SET line_manager_id = ? WHERE id = ?').run(lead, m.id);
   }
 
-  // Ranks and joining dates for the leave application form (team leads are sergeants).
-  db.prepare("UPDATE people SET job_title = CASE WHEN sort_order = 0 THEN 'Sergeant' ELSE 'Constable' END").run();
-  for (const p of db.prepare('SELECT id FROM people').all())
-    db.prepare('UPDATE people SET start_date = ? WHERE id = ?').run(`${2008 + (p.id % 15)}-${String(1 + (p.id % 12)).padStart(2, '0')}-01`, p.id);
-  db.exec("DELETE FROM settings WHERE key LIKE 'leaveForm.%'");
-  db.prepare("INSERT INTO settings (key, value) VALUES ('leaveForm.unit', 'Response Branch')").run();
-
   // Sample leave requests at each stage of the workflow.
   const pid = (sn) => db.prepare('SELECT id FROM people WHERE staff_number = ?').get(sn).id;
   const workDays = (p, a, b) => db.prepare("SELECT COUNT(*) AS n FROM assignments WHERE person_id = ? AND date BETWEEN ? AND ? AND code <> 'RD'").get(p, a, b).n;
@@ -102,26 +95,6 @@ tx(db, () => {
         )
         .run(p, a, b, workDays(p, a, b), note, status, received, decided, status === 'rejected' ? 'Team is already short that week' : null).lastInsertRowid,
     );
-    // A completed application form (made-up contact details).
-    const who = db
-      .prepare('SELECT p.name, p.mobile, p.start_date AS startDate, m.name AS manager, m.job_title AS managerRank FROM people p LEFT JOIN people m ON m.id = p.line_manager_id WHERE p.id = ?')
-      .get(p);
-    const form = {
-      applicant: {
-        unit: 'Response Branch',
-        address: `${10 + (p % 80)} Example Road, Sampletown`,
-        phone: who.mobile,
-        joinDate: who.startDate,
-        noCourtCases: p % 4 !== 0,
-        crownCourtCases: p % 4 === 0 ? 1 : null,
-        availableForCourt: false,
-        trainingCourses: 0,
-        signedBy: who.name,
-        signedAt: received.replace(' ', 'T') + 'Z',
-      },
-      ...(status === 'approved' ? { approval: { name: who.manager || 'Admin', rank: who.managerRank || '', at: decided.replace(' ', 'T') + 'Z', note: null } } : {}),
-    };
-    db.prepare('UPDATE leave_requests SET form = ? WHERE id = ?').run(JSON.stringify(form), id);
     db.prepare("INSERT INTO leave_events (request_id, at, username, action, note) VALUES (?, ?, ?, 'requested', ?)").run(id, received, sn, note);
     if (status !== 'pending') db.prepare('INSERT INTO leave_events (request_id, at, username, action, note) VALUES (?, ?, ?, ?, ?)').run(id, decided, 'manager', status === 'rejected' ? 'reject' : 'approve', null);
   };

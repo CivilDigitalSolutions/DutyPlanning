@@ -11,9 +11,8 @@ import { ACTION_RESULT, ACTIVE_STATUSES, STATUSES, leavePlan, leaveActions, leav
 import { dialog, html, todayIso, toast, addDays } from '../public/js/util.js';
 import { buildPlanWorkbook, buildUserTemplate } from '../server/workbooks.js';
 import { buildIcs } from '../server/ics.js';
-import { DEFAULT_FORM_SETTINGS, SETTING_KEYS, normaliseApplicantForm } from '../public/js/shared/leave-form.js';
 
-const KEY = 'dp-demo-v8';
+const KEY = 'dp-demo-v7';
 const RANK = { staff: 1, planner: 2, admin: 3 };
 const CATEGORIES = ['duty', 'rest', 'leave', 'training', 'other'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -128,9 +127,7 @@ on('GET', '/auth/me', () => {
       mustChangePassword: u.mustChangePassword,
       leaveAdmin: !!u.leaveAdmin,
       supervisor: !!u.supervisor,
-      person: p
-        ? { id: p.id, staffNumber: p.staffNumber, name: p.name, initials: p.initials, teamId: p.teamId, lineManagerId: p.lineManagerId ?? null, jobTitle: p.jobTitle || null, startDate: p.startDate || null, mobile: p.mobile || null }
-        : null,
+      person: p ? { id: p.id, staffNumber: p.staffNumber, name: p.name, initials: p.initials, teamId: p.teamId, lineManagerId: p.lineManagerId ?? null } : null,
     },
   };
 });
@@ -893,21 +890,13 @@ on('POST', '/leave', ({ body }) => {
   if (!type) bad('Choose a leave type');
   const clash = overlaps(pid, b.start, b.end);
   if (clash.length) fail(409, `This overlaps another request (${clash[0].start} to ${clash[0].end})`);
-  const workingDays = breakdown(pid, b.start, b.end).workingDays;
-  let form = null;
-  if (b.form) {
-    const { form: applicant, errors } = normaliseApplicantForm(b.form, { workingDays });
-    if (errors.length) bad(errors.join('. '));
-    form = { applicant: { ...applicant, signedBy: personNameOf(u), signedAt: new Date().toISOString() } };
-  }
   const r = {
     id: nextId(),
     personId: pid,
     type: type.code,
     start: b.start,
     end: b.end,
-    form,
-    days: workingDays,
+    days: breakdown(pid, b.start, b.end).workingDays,
     note: s(b.note, 500) || null,
     status: 'pending',
     createdAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
@@ -924,9 +913,7 @@ on('GET', '/leave/:id', ({ params }) => {
   const r = db.leave.find((x) => x.id === Number(params.id));
   const v = r && leaveView(r);
   if (!v || !(v.personId === u.personId || v.managerPersonId === u.personId || u.role === 'planner' || administers(u))) fail(404, 'Request not found');
-  const p = db.people.find((x) => x.id === r.personId) || {};
-  const person = { name: p.name, staffNumber: p.staffNumber, jobTitle: p.jobTitle || '', startDate: p.startDate || '', mobile: p.mobile, teamName: v.teamName };
-  return { request: withActs(u)(r), ...breakdown(r.personId, r.start, r.end), events: db.leaveEvents.filter((e) => e.requestId === r.id), form: r.form || null, person };
+  return { request: withActs(u)(r), ...breakdown(r.personId, r.start, r.end), events: db.leaveEvents.filter((e) => e.requestId === r.id) };
 });
 
 on('POST', '/leave/:id/:action', ({ params, body }) => {
@@ -944,10 +931,7 @@ on('POST', '/leave/:id/:action', ({ params, body }) => {
   if ((action === 'reject' || action === 'decline') && !note) bad('Give a reason so the person knows why');
   const who = db.people.find((p) => p.id === u.personId)?.name || u.username;
   let rosterChanged = false;
-  if (action === 'approve' || action === 'reject' || action === 'decline') {
-    Object.assign(r, { status: ACTION_RESULT[action], decidedBy: who, decidedAt: new Date().toISOString(), decisionNote: note });
-    if (action === 'approve') r.form = { ...(r.form || {}), approval: { name: who, rank: db.people.find((p) => p.id === u.personId)?.jobTitle || '', at: new Date().toISOString(), note } };
-  }
+  if (action === 'approve' || action === 'reject' || action === 'decline') Object.assign(r, { status: ACTION_RESULT[action], decidedBy: who, decidedAt: new Date().toISOString(), decisionNote: note });
   else if (action === 'apply') {
     const code = findCode(String(body?.code || r.type));
     if (!code || code.category !== 'leave') bad('Choose a leave code to put on the roster');
@@ -956,11 +940,6 @@ on('POST', '/leave/:id/:action', ({ params, body }) => {
     for (const p of plan) db.asg[`${r.personId}|${p.date}`] = { c: p.code, n: `Leave request #${r.id}` };
     Object.assign(r, { status: 'applied', appliedBy: who, appliedAt: new Date().toISOString(), appliedCode: code.code });
     rosterChanged = plan.length > 0;
-    const dayCount = (x) => (x == null || x === '' ? null : Number.isFinite(Number(x)) ? Number(x) : null);
-    r.form = {
-      ...(r.form || {}),
-      admin: { notedBy: who, enteredBy: who, at: new Date().toISOString(), leaveOutstanding: dayCount(body?.leaveOutstanding), restDaysOutstanding: dayCount(body?.restDaysOutstanding) },
-    };
   } else if (action === 'remove') {
     for (const [d, code, prevNote, written] of r.snapshot || []) {
       const k = `${r.personId}|${d}`;
@@ -976,21 +955,6 @@ on('POST', '/leave/:id/:action', ({ params, body }) => {
   if (rosterChanged) changed({ type: 'roster', from: r.start, to: r.end });
   changed({ type: 'leave' });
   return { request: withActs(u)(r) };
-});
-
-// ---------------- Leave application form wording ----------------
-const personNameOf = (u) => db.people.find((p) => p.id === u.personId)?.name || u.username;
-db.formSettings ??= {};
-on('GET', '/settings/leave-form', () => {
-  need('staff');
-  return { settings: { ...DEFAULT_FORM_SETTINGS, ...db.formSettings } };
-});
-on('PUT', '/settings/leave-form', ({ body }) => {
-  const u = need('staff');
-  if (u.role !== 'admin') fail(403, 'Only admins can change the leave form');
-  for (const k of SETTING_KEYS) if (k in (body || {})) db.formSettings[k] = s(body[k], k === 'guidance' ? 5000 : 500);
-  audit(u, 'settings.leaveForm', null);
-  return { settings: { ...DEFAULT_FORM_SETTINGS, ...db.formSettings } };
 });
 
 // ---------------- Leave lockdowns ----------------

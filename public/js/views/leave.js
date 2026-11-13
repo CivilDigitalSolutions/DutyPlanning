@@ -1,8 +1,7 @@
 // Annual leave: request -> line manager approves -> leave administrator adds it to the roster.
 import { get, post } from '../api.js';
 import { state, codeInfo } from '../state.js';
-import { $, html, toast, dialog, fmtDate, todayIso, addDays, contrast, debounce, store } from '../util.js';
-import { AVAILABLE_FOR_COURT_MAX_DAYS, WEEKDAYS, formDate, formWeeks, normaliseApplicantForm, trainingCoursesIn } from '../shared/leave-form.js';
+import { $, html, toast, dialog, fmtDate, todayIso, addDays, contrast, debounce, dayNum, store } from '../util.js';
 
 const STATUS = {
   pending: ['Awaiting approval', 'pending'],
@@ -108,7 +107,6 @@ function requestCard(r, { showPerson = true, meta = '' } = {}) {
     </div>
     <div class="req-actions">
       ${acts.map((a) => html`<button type="button" class="btn btn-sm ${a === 'approve' || a === 'apply' ? 'btn-primary' : DANGER.has(a) ? 'btn-danger' : ''}" data-act="${a}">${ACTION_LABEL[a]}</button>`)}
-      <button type="button" class="btn btn-sm btn-ghost" data-act="form">View form</button>
       <button type="button" class="btn btn-sm btn-ghost" data-act="open">Details</button>
     </div>
   </li>`;
@@ -121,7 +119,6 @@ function bindList(el, list, refresh) {
     if (!b || !li) return;
     const r = list.find((x) => x.id === Number(li.dataset.id));
     if (b.dataset.act === 'open') openRequest(r.id, refresh);
-    else if (b.dataset.act === 'form') openForm(r.id);
     else act(r, b.dataset.act, refresh);
   };
 }
@@ -210,14 +207,13 @@ async function openRequest(id, refresh) {
     </div>`,
     {
       wide: true,
-      actions: `${acts.map((a) => `<button type="button" class="btn ${a === 'approve' || a === 'apply' ? 'btn-primary' : DANGER.has(a) ? 'btn-danger' : ''}" data-act="${a}">${ACTION_LABEL[a]}</button>`).join('')}<span class="spacer"></span><button type="button" class="btn" data-act="form">View form</button><button value="cancel" class="btn" formnovalidate>Close</button>`,
+      actions: `${acts.map((a) => `<button type="button" class="btn ${a === 'approve' || a === 'apply' ? 'btn-primary' : DANGER.has(a) ? 'btn-danger' : ''}" data-act="${a}">${ACTION_LABEL[a]}</button>`).join('')}<span class="spacer"></span><button value="cancel" class="btn" formnovalidate>Close</button>`,
     },
   );
   d.addEventListener('click', (e) => {
     const a = e.target.closest('[data-act]')?.dataset.act;
     if (!a) return;
     d.close();
-    if (a === 'form') return openForm(r.id);
     act(r, a, refresh);
   });
 }
@@ -232,10 +228,6 @@ async function applyDialog(r, refresh) {
       leave later puts them back.</p>
       <div class="form-grid">
         <label>Code to put on the roster<select name="code">${codes.map((c) => html`<option value="${c.code}" ${c.code === r.type ? 'selected' : ''}>${c.code} - ${c.label}</option>`)}</select></label>
-        <span></span>
-        <p class="span2 muted small">Admin Unit section of the form (optional):</p>
-        <label>Annual leave outstanding if taken as above (days)<input type="number" name="leaveOutstanding" min="0" max="400" step="0.5" /></label>
-        <label>Outstanding rest days remaining<input type="number" name="restDaysOutstanding" min="0" max="400" step="0.5" /></label>
       </div>
       ${data.coverWarnings ? html`<p class="error">Team would be below its minimum on ${plural(data.coverWarnings, 'day')}.</p>` : ''}
       <div class="apply-preview"></div>`,
@@ -251,7 +243,7 @@ async function applyDialog(r, refresh) {
     if (e.submitter?.value !== 'ok') return;
     e.preventDefault();
     try {
-      await post(`/leave/${r.id}/apply`, { code: f.code.value, leaveOutstanding: f.leaveOutstanding.value, restDaysOutstanding: f.restDaysOutstanding.value });
+      await post(`/leave/${r.id}/apply`, { code: f.code.value });
       d.close();
       toast('Leave added to the roster', 'success');
       refresh();
@@ -261,74 +253,31 @@ async function applyDialog(r, refresh) {
   });
 }
 
-// ---------- Form 410: application for annual leave ----------
-const CHECK = (on) => (on ? 'X' : '');
-const when = (iso) => (iso ? `${formDate(iso.slice(0, 10))} ${new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '');
-
-async function requestDialog(sum, refresh) {
-  const [{ user }, { settings }] = await Promise.all([get('/auth/me'), get('/settings/leave-form')]);
-  const me = user.person || {};
-  const team = state.teamMap.get(me.teamId)?.name || '';
+function requestDialog(sum, refresh) {
   const types = sum.leaveTypes.length ? sum.leaveTypes : [{ code: 'AL', label: 'Annual leave' }];
   const start = addDays(todayIso(), 7);
   const d = dialog(
-    `${settings.number} - ${settings.title}`,
-    html`<div class="f410-req">
-      ${settings.notice ? html`<p class="f410-notice">${settings.notice}</p>` : ''}
-      <fieldset><legend>Applicant</legend><div class="form-grid">
-        <label>OCU/Branch<input name="unit" value="${settings.unit}" maxlength="100" /></label>
-        <label>Date<input value="${formDate(todayIso())}" readonly /></label>
-        <label>Name<input value="${me.name || user.username}" readonly /></label>
-        <label>Rank/Band<input value="${me.jobTitle || ''}" readonly placeholder="Not recorded" /></label>
-        <label>Warrant/Pay No.<input value="${me.staffNumber || ''}" readonly /></label>
-        <label>Leave party<input value="${team}" readonly /></label>
-      </div></fieldset>
-      <fieldset><legend>Leave</legend><div class="form-grid">
-        <label>Type<select name="type">${types.map((t) => html`<option value="${t.code}">${t.label}</option>`)}</select></label>
-        <span></span>
-        <label>From<input type="date" name="start" value="${start}" required /></label>
-        <label>To<input type="date" name="end" value="${start}" required /></label>
-        <div class="span2 leave-preview muted">Checking your roster…</div>
-      </div></fieldset>
-      <fieldset><legend>While on leave</legend><div class="form-grid">
-        <label class="span2">Address while on leave<textarea name="address" rows="2" maxlength="300"></textarea></label>
-        <label>Telephone number<input name="phone" type="tel" value="${me.mobile || ''}" maxlength="40" /></label>
-        <label>Date of joining<input name="joinDate" type="date" value="${me.startDate || ''}" /></label>
-      </div></fieldset>
-      <fieldset><legend>Declarations</legend><div class="f410-decl">
-        <label class="check"><input type="checkbox" name="noCourtCases" /> <span>(a) I have no cases at Magistrates' Courts during the above period. I have no cases pending at Crown Court.</span></label>
-        <label class="inline">(b) I have <input type="number" name="crownCourtCases" min="0" max="999" class="num" /> cases pending at Crown Court.</label>
-        <label class="check"><input type="checkbox" name="availableForCourt" /> <span>(c) During the above period of <b data-days>0</b> days I will be at the address shown and available to attend Court. <small class="muted">(leave of ${AVAILABLE_FOR_COURT_MAX_DAYS} days or less)</small></span></label>
-        <label class="inline">(d) I have <input type="number" name="trainingCourses" min="0" max="999" class="num" value="0" /> training courses over the above dates. <small class="muted" data-training-hint></small></label>
-      </div></fieldset>
-      <fieldset><legend>Signature</legend>
-        <label class="check"><input type="checkbox" name="declaration" /> <span>I confirm the entries above are correct. Signed electronically as <b>${me.name || user.username}</b> on submission.</span></label>
-        <label>Note for your line manager (optional)<textarea name="note" rows="2" maxlength="500"></textarea></label>
-      </fieldset>
-      <div class="f410-errors error" role="alert" hidden></div>
+    'Request leave',
+    html`<div class="form-grid">
+      <label>Type<select name="type">${types.map((t) => html`<option value="${t.code}">${t.label}</option>`)}</select></label>
+      <span></span>
+      <label>First day<input type="date" name="start" value="${start}" required /></label>
+      <label>Last day<input type="date" name="end" value="${start}" required /></label>
+      <label class="span2">Note for your manager (optional)<textarea name="note" rows="2" maxlength="500"></textarea></label>
+      <div class="span2 leave-preview muted">Checking your roster…</div>
     </div>`,
-    { wide: true, actions: '<button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn btn-primary">Sign and submit</button>' },
+    { wide: true, actions: '<button value="cancel" class="btn" formnovalidate>Cancel</button><button value="ok" class="btn btn-primary">Send request</button>' },
   );
   const f = $('form', d);
   const box = $('.leave-preview', d);
-  let workingDays = 0;
-  let trainingTouched = false;
-  f.trainingCourses.addEventListener('input', () => (trainingTouched = true));
   const preview = debounce(async () => {
     if (f.end.value && f.start.value && f.end.value < f.start.value) f.end.value = f.start.value;
     try {
       const p = await get(`/leave/preview?start=${f.start.value}&end=${f.end.value}`);
-      workingDays = p.workingDays;
-      $('[data-days]', d).textContent = p.workingDays;
-      f.availableForCourt.disabled = p.workingDays > AVAILABLE_FOR_COURT_MAX_DAYS;
-      if (f.availableForCourt.disabled) f.availableForCourt.checked = false;
-      const courses = trainingCoursesIn(p.days);
-      if (!trainingTouched) f.trainingCourses.value = courses;
-      $('[data-training-hint]', d).textContent = courses ? `(${plural(courses, 'course')} on your roster in this period)` : '';
       const manager = state.user.person?.lineManagerId;
       box.innerHTML = html`
         <p>This covers <b>${plural(p.workingDays, 'working day')}</b> on your roster.</p>
-        ${weekGrid(formWeeks(p.days, f.type.value))}
+        <div class="mini-days">${p.days.map((x) => html`<div class="mini-day ${x.working ? '' : 'off'} ${x.publicHoliday ? 'ph' : ''}" title="${x.publicHoliday || ''}"><small>${x.publicHoliday ? 'Hol' : fmtDate(x.date, 'dow')}</small><b>${dayNum(x.date)}</b>${chip(x.code)}</div>`)}</div>
         ${p.days.some((x) => x.publicHoliday)
           ? html`<p class="small">Public holidays in this period (not counted): ${p.days.filter((x) => x.publicHoliday).map((x) => `${fmtDate(x.date, 'dm')} ${x.publicHoliday}`).join(', ')}.</p>`
           : ''}
@@ -343,156 +292,20 @@ async function requestDialog(sum, refresh) {
       box.innerHTML = html`<p class="error">${e.message}</p>`;
     }
   }, 250);
-  f.addEventListener('input', (e) => {
-    if (['start', 'end', 'type'].includes(e.target.name)) preview();
-  });
-  f.addEventListener('change', (e) => {
-    if (e.target.name === 'type') preview();
-  });
+  f.addEventListener('input', preview);
   preview();
-  const formValues = () => ({
-    unit: f.unit.value,
-    address: f.address.value,
-    phone: f.phone.value,
-    joinDate: f.joinDate.value,
-    noCourtCases: f.noCourtCases.checked,
-    crownCourtCases: f.crownCourtCases.value,
-    availableForCourt: f.availableForCourt.checked,
-    trainingCourses: f.trainingCourses.value,
-    declaration: f.declaration.checked,
-  });
   f.addEventListener('submit', async (e) => {
     if (e.submitter?.value !== 'ok') return;
     e.preventDefault();
-    const errBox = $('.f410-errors', d);
-    const { errors } = normaliseApplicantForm(formValues(), { workingDays });
-    if (errors.length) {
-      errBox.innerHTML = html`<b>Please complete the form:</b><ul>${errors.map((x) => html`<li>${x}</li>`)}</ul>`;
-      errBox.hidden = false;
-      errBox.scrollIntoView({ block: 'nearest' });
-      return;
-    }
-    errBox.hidden = true;
     try {
-      await post('/leave', { type: f.type.value, start: f.start.value, end: f.end.value, note: f.note.value, form: formValues() });
+      await post('/leave', { type: f.type.value, start: f.start.value, end: f.end.value, note: f.note.value });
       d.close();
-      toast(state.user.person?.lineManagerId ? 'Form 410 signed and sent to your line manager to approve' : 'Form 410 signed and sent to an administrator to approve', 'success');
+      toast(state.user.person?.lineManagerId ? 'Leave requested - sent to your line manager to approve' : 'Leave requested - sent to an administrator to approve', 'success');
       refresh();
     } catch (ex) {
       toast(ex.message, 'error');
     }
   });
-}
-
-/** Sat-Fri grid of Date / Nature of leave rows, as on the paper form. */
-function weekGrid(weeks) {
-  if (!weeks.length) return '';
-  return html`<div class="table-wrap"><table class="f410-weeks">
-    <thead><tr><th></th>${WEEKDAYS.map((w) => html`<th>${w}</th>`)}</tr></thead>
-    <tbody>${weeks.map(
-      (wk) => html`<tr><th>Date</th>${wk.map((c) => html`<td>${c ? formDate(c.date, true) : ''}</td>`)}</tr>
-        <tr class="nature"><th>Nature of leave</th>${wk.map((c) => html`<td>${c ? c.nature : ''}</td>`)}</tr>`,
-    )}</tbody></table></div>`;
-}
-
-/** The completed form, laid out like the paper Form 410. */
-function form410Html({ request: r, person = {}, form, days }, settings) {
-  const a = form?.applicant || {};
-  const ap = form?.approval;
-  const ad = form?.admin;
-  const weeks = formWeeks(days, r.type);
-  while (weeks.length < 1) weeks.push(Array(7).fill(null));
-  const managerSig = ap
-    ? `Digitally approved ${when(ap.at)}`
-    : r.status === 'rejected'
-      ? `Not approved${r.decidedBy ? ` by ${r.decidedBy}` : ''}`
-      : r.status === 'pending'
-        ? 'Awaiting approval'
-        : r.decidedBy
-          ? `Approved by ${r.decidedBy}`
-          : '';
-  const guidance = (settings.guidance || '').split('\n').map((x) => x.trim()).filter(Boolean);
-  return html`<article class="f410">
-    <header class="f410-top"><div></div><div class="f410-no">${settings.number}</div></header>
-    <h1 class="f410-title">${settings.title}</h1>
-    ${settings.notice ? html`<p class="f410-notice">${settings.notice}</p>` : ''}
-    <table class="f410-table">
-      <tr><th>OCU/Branch:</th><td colspan="3">${a.unit || settings.unit}</td><th>Date:</th><td>${a.signedAt ? formDate(a.signedAt.slice(0, 10)) : formDate((r.createdAt || '').slice(0, 10))}</td></tr>
-      <tr><th>Name:</th><td>${person.name || r.personName}</td><th>Rank/Band:</th><td>${person.jobTitle || ''}</td><th>Warrant/Pay No.:</th><td>${person.staffNumber || r.staffNumber || ''}</td></tr>
-      <tr><td colspan="6" class="f410-period">I apply to take leave covering the period from: <b>${formDate(r.start)}</b> to: <b>${formDate(r.end)}</b> as detailed below:</td></tr>
-    </table>
-    <table class="f410-table f410-weeks">
-      <thead><tr><th></th>${WEEKDAYS.map((w) => html`<th>${w}</th>`)}</tr></thead>
-      <tbody>${weeks.map(
-        (wk) => html`<tr><th>Date</th>${wk.map((c) => html`<td>${c ? formDate(c.date, true) : ''}</td>`)}</tr>
-          <tr class="nature"><th>Nature of leave</th>${wk.map((c) => html`<td>${c ? c.nature : ''}</td>`)}</tr>`,
-      )}</tbody>
-    </table>
-    <p class="f410-small">Against "Nature of Leave", show as applicable, Annual Leave - A/L, Rest Day - R/D, Bank Holiday Leave - B.H.L., Monthly Leave - M/L (Superintendents and Chief Superintendents only), etc.</p>
-    <table class="f410-table">
-      <tr><th>Address while on leave:</th><td colspan="3">${a.address || ''}</td></tr>
-      <tr><th>Telephone Number:</th><td colspan="3">${a.phone || ''}</td></tr>
-      <tr><th>Date of joining:</th><td>${formDate(a.joinDate || person.startDate || '')}</td><th>Leave party:</th><td>${r.teamName || ''}</td></tr>
-    </table>
-    <p class="f410-small">Enter X in appropriate box</p>
-    <table class="f410-table f410-decl-table">
-      <tr><td class="box">${CHECK(a.noCourtCases)}</td><td>(a) I have no cases at Magistrates' Courts during the above period. I have no cases pending at Crown Court.</td></tr>
-      <tr><td class="box">${CHECK(a.crownCourtCases > 0)}</td><td>(b) I have <b class="fill">${a.crownCourtCases ?? ''}</b> cases pending at Crown Court.</td></tr>
-      <tr><td class="box">${CHECK(a.availableForCourt)}</td><td>(c) During the above period of <b class="fill">${r.days}</b> days I will be at the address shown and available to attend Court.<sup>1</sup></td></tr>
-      <tr><td class="box">${CHECK(a.trainingCourses > 0)}</td><td>(d) I have <b class="fill">${a.trainingCourses ?? ''}</b> training courses over the above dates.<sup>4</sup></td></tr>
-    </table>
-    <table class="f410-table">
-      <tr><th>Annual Leave Applicant Signature:</th><td>${a.signedBy ? `Signed electronically by ${a.signedBy} ${when(a.signedAt)}` : ''}</td></tr>
-    </table>
-    <p class="f410-section">AUTHORISATION BY SUPERVISING OFFICER - All above entries have been checked and are found to be correct, I therefore authorise this leave. (*RCRD - applies only where less than 35 days given)</p>
-    <table class="f410-table">
-      <tr><th>Line Manager Name:</th><td>${ap?.name || r.managerName || ''}</td><th>Rank:</th><td>${ap?.rank || ''}</td></tr>
-      <tr><th>Line Manager Signature:</th><td colspan="3">${managerSig}</td></tr>
-    </table>
-    <p class="f410-section">This section to be completed by the Admin Unit</p>
-    <table class="f410-table">
-      <tr><th>Noted for duty purposes:</th><td>${ad ? `${ad.notedBy} ${when(ad.at)}` : ''}</td><th>Entered in Annual leave register by:</th><td>${ad?.enteredBy || ''}</td></tr>
-      <tr><th>Annual leave outstanding if taken as above:</th><td colspan="3">${ad?.leaveOutstanding ?? ''} days.</td></tr>
-      <tr><th>Total number of outstanding rest days remaining:</th><td colspan="3">${ad?.restDaysOutstanding ?? ''} days.</td></tr>
-      <tr><th>(Approved) Signature:</th><td colspan="2">${ad ? `Added to roster electronically by ${ad.notedBy} ${when(ad.at)}` : ''}</td><td class="f410-small">Admin/Officer in charge</td></tr>
-    </table>
-    ${guidance.length
-      ? html`<section class="f410-guidance"><h2>Notes for guidance on leave:</h2><ol>${guidance.map((g) => html`<li>${g.replace(/^\d+\.\s*/, '')}</li>`)}</ol></section>`
-      : ''}
-    ${settings.reference ? html`<footer class="f410-ref">${settings.reference}</footer>` : ''}
-  </article>`;
-}
-
-async function openForm(id) {
-  let data, settings;
-  try {
-    [data, { settings }] = await Promise.all([get(`/leave/${id}`), get('/settings/leave-form')]);
-  } catch (e) {
-    return toast(e.message, 'error');
-  }
-  const d = dialog(`${settings.number}: ${data.request.personName}`, form410Html(data, settings), {
-    wide: true,
-    actions: '<button type="button" class="btn btn-primary" data-print>Print or save as PDF</button><span class="spacer"></span><button value="cancel" class="btn" formnovalidate>Close</button>',
-  });
-  d.classList.add('f410-dialog');
-  $('[data-print]', d).addEventListener('click', () => printForm(form410Html(data, settings)));
-}
-
-/** Print just the form (the browser's print dialog also offers "Save as PDF"). */
-function printForm(content) {
-  const root = document.createElement('div');
-  root.id = 'print-root';
-  root.innerHTML = String(content);
-  document.body.append(root);
-  document.body.classList.add('printing');
-  const done = () => {
-    document.body.classList.remove('printing');
-    root.remove();
-    removeEventListener('afterprint', done);
-  };
-  addEventListener('afterprint', done);
-  window.print();
-  setTimeout(() => document.body.classList.contains('printing') && done(), 60000);
 }
 
 // ---------- tabs ----------
@@ -719,7 +532,6 @@ async function queue(tab, body, sum, refresh) {
     if (!li) return;
     const r = requests.find((x) => x.id === Number(li.dataset.id));
     if (a === 'open') openRequest(r.id, refresh);
-    else if (a === 'form') openForm(r.id);
     else act(r, a, refresh);
   };
   draw();

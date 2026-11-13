@@ -17,7 +17,6 @@ const SHELL_FILES = [
   '/js/views/admin.js',
   '/js/views/leave.js',
   '/js/router.js',
-  '/js/shared/leave-form.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',
   '/icons/icon-192.png',
